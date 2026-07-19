@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "count": 1,
+  "events": [
+    {
+      "received_at": "2026-07-19T15:04:11.238401Z",
+      "method": "POST",
+      "path": "/webhooks/github",
+      "query": {},
+      "headers": {
+        "host": "127.0.0.1:8000",
+        "content-type": "application/json",
+        "user-agent": "GitHub-Hookshot/example",
+        "x-github-event": "push",
+        "x-github-delivery": "00000000-0000-0000-0000-000000000000",
+        "x-hub-signature-256": "sha256=869956f9813390d4aadde4dd1029b11d8bc1b3bd3509b483d4bd3caf87d38243"
+      },
+      "source_ip": "127.0.0.1",
+      "provider": "github",
+      "verified": 1,
+      "body_base64": "eyJyZWYiOiJyZWZzL2hlYWRzL21haW4iLCJyZXBvc2l0b3J5Ijp7ImZ1bGxfbmFtZSI6ImFsZWJyaXRvMTI0MzU2L3dlYmhvb2stdG9vbGtpdCJ9LCJwdXNoZXIiOnsibmFtZSI6ImFsZWJyaXRvMTI0MzU2In0sImNvbW1pdHMiOlt7ImlkIjoiYTFiMmMzZDRlNWY2MDcxODI5M2E0YjVjNmQ3ZThmOTAxMjM0NTY3OCIsIm1lc3NhZ2UiOiJBZGQgc2lnbmF0dXJlIHZlcmlmaWNhdGlvbiBmb3IgU2hvcGlmeSIsImF1dGhvciI6eyJuYW1lIjoiQWxlamFuZHJvIEJyaXRvIn19LHsiaWQiOiJiMmMzZDRlNWY2MDcxODI5M2E0YjVjNmQ3ZThmOTAxMjM0NTY3ODlhIiwibWVzc2FnZSI6IkZpeCBTdHJpcGUgdGltZXN0YW1wIHRvbGVyYW5jZSB3aW5kb3ciLCJhdXRob3IiOnsibmFtZSI6IkFsZWphbmRybyBCcml0byJ9fV19"
+    }
+  ]
+}
