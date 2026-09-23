@@ -7,10 +7,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from src.webhooks import verify
-from src.webhooks.forward import ForwardResult, ForwardTarget, TargetStats, forward_event
-from src.webhooks.server import create_app
-from src.webhooks.storage import StoredEvent
+from webhooks import verify
+from webhooks.forward import ForwardResult, ForwardTarget, TargetStats, forward_event
+from webhooks.server import create_app
+from webhooks.storage import StoredEvent
 
 SECRET = "forward" + "-" + "secret"
 

@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from src.webhooks import fixtures
-from src.webhooks.storage import StoredEvent, Storage
+from webhooks import fixtures
+from webhooks.storage import StoredEvent, Storage
 
 
 @pytest.fixture()

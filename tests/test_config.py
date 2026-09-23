@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from src.webhooks import config
+from webhooks import config
 
 # Assembled at runtime so nothing on disk looks like a credential.
 DEMO_SECRET = "demo" + "-" + "secret" + "-" + "123"
@@ -71,7 +71,7 @@ def test_missing_implicit_env_file_is_fine_but_explicit_one_is_an_error(tmp_path
 
 
 def test_env_file_with_bom_is_parsed(tmp_path):
-    (tmp_path / ".env").write_bytes("﻿WEBHOOK_HOST=0.0.0.0\n".encode("utf-8"))
+    (tmp_path / ".env").write_bytes(b"\xef\xbb\xbfWEBHOOK_HOST=0.0.0.0\n")  # UTF-8 BOM (Notepad)
     config.load_env_file()
     assert config.DEFAULT_HOST == "0.0.0.0"
 

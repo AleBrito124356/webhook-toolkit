@@ -5,14 +5,18 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-receiver-009688?logo=fastapi&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-36%20passing-brightgreen)
-![Providers](https://img.shields.io/badge/verifies-GitHub%20%7C%20Stripe%20%7C%20Slack%20%7C%20Shopify-6E56CF)
+![Tests](https://img.shields.io/badge/tests-267%20passing-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)
+![Providers](https://img.shields.io/badge/verifies-GitHub%20%7C%20Stripe%20%7C%20Slack%20%7C%20Shopify%20%7C%20HMAC-6E56CF)
 
-A local webhook development bench. Point a provider (or a captured payload) at a
-FastAPI receiver that stores every request byte-for-byte, verifies the provider
-signature, and shows it in a live web inspector. Then **replay** any stored event
-to the handler you are building — re-signed with a fresh timestamp so it passes
-verification — or **fan-out** live deliveries to several local services at once.
+A local webhook development bench. Point a provider — or the built-in **event
+simulator** — at a FastAPI receiver that stores every request byte-for-byte,
+verifies the provider signature and, when it fails, **explains why** (trailing
+newline, re-serialized JSON, stale timestamp, wrong or swapped secret...). Then
+**replay** any stored event to the handler you are building — edited if you
+like, re-signed with a fresh timestamp so it passes verification — from the CLI
+or the browser inspector, or **fan-out** live deliveries to several local
+services at once.
 
 ## Why
 
@@ -25,24 +29,28 @@ internet; your handler lives on `localhost`. The usual answers are all annoying:
   that silently breaks the moment you re-serialize the body or replay a stale
   payload past its timestamp tolerance.
 
-This toolkit removes the tunnel from the inner loop. Capture a delivery once (or
-craft a fixture), then iterate on your handler by replaying it locally as many
-times as you like, with correct signatures, in milliseconds.
+This toolkit removes the tunnel from the inner loop. Generate realistic signed
+events offline (or capture a real delivery once), then iterate on your handler
+by replaying them locally as many times as you like, with correct signatures,
+in milliseconds — and when a signature does not verify, get the reason instead
+of a bare "invalid".
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    P[Provider or replay] -->|HTTP| R[FastAPI receiver]
+    P[Provider] -->|HTTP| R[FastAPI receiver]
+    SIM[send: signed samples] -->|HTTP| R
     R --> D[Detect provider from headers]
-    D --> V[Verify signature]
+    D --> V[Verify + diagnose]
     V --> S[(SQLite store)]
-    S --> I[Live web inspector]
-    S --> RP[Replay with re-signing]
-    S --> F[Fan-out forward]
+    S --> I[Inspector + JSON API]
+    S --> RP[Replay: edit, re-sign]
+    I --> RP
+    S --> F[Concurrent fan-out]
     RP -->|localhost| H1[Your handler]
-    F -->|localhost| H2[Handler A]
-    F -->|localhost| H3[Handler B]
+    F -->|github=| H2[Handler A]
+    F -->|stripe=| H3[Handler B]
 ```
 
 The receiver is a catch-all: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` and
@@ -85,14 +93,27 @@ verifies it like the built-in providers, `replay --sign` re-signs it, and
 
 ## Quickstart
 
+Install the `webhook-toolkit` command (Python 3.10+):
+
+```bash
+pip install "git+https://github.com/AleBrito124356/webhook-toolkit"
+webhook-toolkit --version
+webhook-toolkit samples
+```
+
+or work from a checkout (needed for the example handlers and the demo):
+
 ```bash
 git clone https://github.com/AleBrito124356/webhook-toolkit.git
 cd webhook-toolkit
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e ".[dev]"      # or: pip install -r requirements-dev.txt
 
 cp .env.example .env        # then fill in the signing secrets you have
 ```
+
+Every `python cli.py <command>` below is the same as `webhook-toolkit <command>`
+once the package is installed.
 
 Every command reads `./.env` on startup (or the file given with
 `--env-file FILE`); variables already exported in your shell win over the file.
@@ -123,14 +144,17 @@ ports, generates fresh random secrets, and then checks every feature for real:
 all 14 bundled samples are signed, delivered and verified; a tampered, a
 wrongly-signed and an hour-old delivery are each diagnosed; stored events are
 replayed to the handlers with and without re-signing and with an edited body;
-and samples are sent straight to the handlers. It ends with:
+samples are sent straight to the handlers; the inspector's JSON API is driven
+the way the browser does; and a second receiver fans captures out to both
+handlers plus a failing one. It ends with:
 
 ```
-PASS --set overrides change the body and the signature still verifies - amount=125000 currency=eur
-──────────────────── 5. The inspector API has every capture ────────────────────
-PASS GET /api/events reports the true total - 17 events stored
-─────────────────────────────────── Summary ────────────────────────────────────
-28/28 checks passed in 1.9 s, loopback only, no tunnel and no provider account.
+PASS a cross-site page cannot clear the captures - status 403
+PASS github= target got only the GitHub event - delivered 1, last status 200
+PASS stripe= target got only the Stripe event - delivered 1, last status 200
+PASS a 503 target is retried, counted as failed, and does not block the others - failed 2, last error HTTP 503
+─────────────────────────────────── Summary ───────────────────────────────────
+36/36 checks passed in 3.4 s, loopback only, no tunnel and no provider account.
 ```
 
 ### Do it yourself
@@ -345,7 +369,7 @@ exactly and you can commit them as deterministic test inputs.
 
 ```python
 from fastapi import FastAPI, Header, HTTPException, Request
-from src.webhooks.verify import verify_github
+from webhooks.verify import diagnose, verify_github
 
 app = FastAPI()
 
@@ -353,32 +377,48 @@ app = FastAPI()
 async def github(request: Request, x_hub_signature_256: str | None = Header(None)):
     raw = await request.body()                     # raw bytes, never a parsed model
     if not verify_github(SECRET, raw, x_hub_signature_256):
+        # Optional: log *why* (never return this detail to the caller).
+        print(diagnose("github", SECRET, raw, dict(request.headers)).reason)
         raise HTTPException(401, "invalid signature")
     ...  # safe to parse and act now
 ```
 
-Full runnable versions live in `examples/handlers/`.
+`verify_stripe`, `verify_slack`, `verify_shopify` and `verify_generic` work the
+same way, and every `sign_*` twin produces the exact header a provider sends —
+handy for your own tests. `webhooks.testing.BackgroundServer` runs any ASGI app
+on a free loopback port for integration tests. Full runnable handlers live in
+`examples/handlers/` (from a checkout, `import src.webhooks...` keeps working
+too).
 
 ## Project structure
 
 ```
 webhook-toolkit/
-├── cli.py                       # serve, forward, replay, verify, list, export, import
+├── cli.py                       # `python cli.py ...` shim for a source checkout
+├── pyproject.toml               # package + `webhook-toolkit` console script
 ├── src/webhooks/
-│   ├── server.py                # FastAPI catch-all receiver + live console
-│   ├── inspector.py             # self-contained inline HTML inspector (no CDN)
-│   ├── verify.py                # sign_/verify_ pairs + provider registry
-│   ├── storage.py               # SQLite store, raw-byte bodies
-│   ├── replay.py                # build/send replays, re-signing
-│   ├── forward.py               # fan-out with retries and per-target status
+│   ├── cli.py                   # serve, forward, send, samples, replay, verify, show, list, export, import
+│   ├── server.py                # catch-all receiver, JSON API, live console
+│   ├── inspector.py             # self-contained inspector page (no CDN)
+│   ├── verify.py                # sign_/verify_ pairs, generic HMAC, diagnose()
+│   ├── inbound.py               # verified / invalid / not checked + reason for a capture
+│   ├── samples.py               # offline event simulator (render, override, sign)
+│   ├── templates/<provider>/    # 14 sample events with realistic headers
+│   ├── replay.py                # build/send replays, re-signing, curl rendering
+│   ├── forward.py               # concurrent fan-out, provider routing, stats
+│   ├── storage.py               # SQLite store, raw-byte bodies, filters, migrations
 │   ├── fixtures.py              # JSON export / import
-│   └── config.py                # env-based secrets, placeholder detection
+│   ├── config.py                # .env loader, secret states, generic scheme
+│   └── testing.py               # BackgroundServer for loopback integration tests
 ├── examples/
+│   ├── offline_demo.py          # the whole loop in one command (36 checks)
 │   ├── handlers/                # verified GitHub push + Stripe payment handlers
 │   └── fixtures/github_push.json
-├── tests/                       # 36 tests: verify vectors, replay re-sign, storage
+├── docs/inspector.png
+├── tests/                       # 267 tests, see below
+├── CHANGELOG.md
 ├── .env.example
-└── requirements.txt
+└── requirements*.txt
 ```
 
 ## Design notes
@@ -391,18 +431,35 @@ webhook-toolkit/
   turns a stored event into the outgoing request; the network call is one thin
   wrapper around it. That is why re-signing is unit-tested without a socket.
 - **Raw bytes end to end.** Bodies are `BLOB`s and never decoded before hashing,
-  so a replayed payload is byte-identical to the original.
+  so a replayed payload is byte-identical to the original. Hop-by-hop headers
+  (`Transfer-Encoding`, `Connection` and friends) are dropped on replay and
+  forward, so a chunked capture is re-sent as valid HTTP.
+- **Diagnosis never changes the verdict.** `diagnose()` reports `valid` exactly
+  when the strict `verify_*` function does; the variant search only runs to
+  explain a failure.
 
 ## Testing
 
 ```bash
-pip install -r requirements-dev.txt
-pytest
+pip install -e ".[dev]"
+pytest                       # 267 tests, ~20 s, offline, loopback only
+coverage run -m pytest && coverage report   # 97% (statements + branches)
 ```
 
 The suite computes every expected signature **inside the test** from a fake,
 runtime-assembled secret, then checks that tampering the body, the secret, or the
-timestamp is rejected — no credential-shaped strings live on disk.
+timestamp is rejected — no credential-shaped strings live on disk. It covers one
+test per diagnosis code and per recognised mistake, every sample through the
+receiver (right and wrong secret), the JSON API (filters, paging, replay,
+curl, the cross-site guard), forwarding with `httpx.MockTransport` (retries,
+the 4xx rule, concurrency, routing), `.env` handling, a raw-socket check of the
+replayed bytes, the generated `curl` command executed with bash + curl, and
+real processes: `serve` + `send` as separate processes and the offline demo.
+A leaked SQLite connection or socket fails the run (`ResourceWarning` is an
+error in `pytest.ini`).
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in 0.2.0, including the few
+behaviour changes.
 
 ## Related projects
 

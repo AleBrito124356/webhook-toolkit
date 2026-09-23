@@ -7,13 +7,13 @@ from urllib.parse import parse_qs
 import pytest
 from fastapi.testclient import TestClient
 
-import cli
+from webhooks import cli
 from _helpers import load_handler
-from src.webhooks import samples, verify
-from src.webhooks.inbound import assess
-from src.webhooks.server import create_app
-from src.webhooks.storage import Storage
-from src.webhooks.testing import BackgroundServer
+from webhooks import samples, verify
+from webhooks.inbound import assess
+from webhooks.server import create_app
+from webhooks.storage import Storage
+from webhooks.testing import BackgroundServer
 
 SECRETS = {
     "github": "gh" + "-" + "sample-secret",

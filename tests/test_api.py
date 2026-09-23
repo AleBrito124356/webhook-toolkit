@@ -10,9 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from _helpers import load_handler
-from src.webhooks import verify
-from src.webhooks.server import create_app
-from src.webhooks.testing import BackgroundServer
+from webhooks import verify
+from webhooks.server import create_app
+from webhooks.testing import BackgroundServer
 
 SECRET = "api" + "-" + "test" + "-" + "secret"
 BODY = b'{"ref":"refs/heads/main","repository":{"full_name":"octo-org/demo"},"commits":[]}'

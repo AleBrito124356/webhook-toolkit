@@ -5,9 +5,9 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from src.webhooks import verify
-from src.webhooks.server import create_app
-from src.webhooks.storage import Storage
+from webhooks import verify
+from webhooks.server import create_app
+from webhooks.storage import Storage
 
 DEMO_SECRET = "server" + "-" + "test" + "-" + "secret"
 BODY = b'{"action": "opened", "number": 1}'

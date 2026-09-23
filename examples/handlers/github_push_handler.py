@@ -31,11 +31,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
-# Make ``src`` importable when run from the repository root.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Use the checkout's package when run from the repository (``pip install`` of
+# webhook-toolkit makes ``webhooks`` importable anywhere).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from src.webhooks.config import load_env_file  # noqa: E402
-from src.webhooks.verify import verify_github  # noqa: E402
+from webhooks.config import load_env_file  # noqa: E402
+from webhooks.verify import verify_github  # noqa: E402
 
 # Share the toolkit's .env (no-op when there is none; real env vars win).
 load_env_file()

@@ -34,7 +34,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT))  # for examples.handlers
+sys.path.insert(0, str(REPO_ROOT / "src"))  # for the webhooks package
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
@@ -42,13 +43,13 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.markup import escape  # noqa: E402
 
-from src.webhooks import config  # noqa: E402
-from src.webhooks._stdio import ensure_utf8_stdio  # noqa: E402
-from src.webhooks import samples  # noqa: E402
-from src.webhooks.replay import replay_event, send_replay  # noqa: E402
-from src.webhooks.server import create_app  # noqa: E402
-from src.webhooks.storage import Storage  # noqa: E402
-from src.webhooks.testing import BackgroundServer  # noqa: E402
+from webhooks import config  # noqa: E402
+from webhooks._stdio import ensure_utf8_stdio  # noqa: E402
+from webhooks import samples  # noqa: E402
+from webhooks.replay import replay_event, send_replay  # noqa: E402
+from webhooks.server import create_app  # noqa: E402
+from webhooks.storage import Storage  # noqa: E402
+from webhooks.testing import BackgroundServer  # noqa: E402
 
 console = Console(highlight=False, soft_wrap=True)
 

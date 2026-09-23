@@ -1,7 +1,7 @@
 """Pytest bootstrap shared by every test.
 
-* Puts the repository root on ``sys.path`` so ``import src.webhooks...`` works
-  without installing the package.
+* Puts ``src/`` on ``sys.path`` so ``import webhooks`` works without
+  installing the package (and the repository root, for ``examples``).
 * Isolates each test from the developer's machine: provider secrets and
   ``WEBHOOK_*`` settings are removed from the environment, the working
   directory is a fresh temp dir (so a real ``./.env`` is never picked up), and
@@ -16,6 +16,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 _ISOLATED_PREFIXES = ("WEBHOOK_", "GENERIC_WEBHOOK_")
 _ISOLATED_NAMES = {

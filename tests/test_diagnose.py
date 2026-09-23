@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from src.webhooks import verify
-from src.webhooks.verify import diagnose
+from webhooks import verify
+from webhooks.verify import diagnose
 
 SECRET = ("diag" + "-" + "secret" + "-" + "value").encode("utf-8")
 NOW = 1_750_000_000

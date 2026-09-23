@@ -4,11 +4,11 @@ import os
 
 import pytest
 
-import cli
+from webhooks import cli
 from _helpers import REPO_ROOT, load_handler
-from src.webhooks import verify
-from src.webhooks.storage import Storage, StoredEvent
-from src.webhooks.testing import BackgroundServer
+from webhooks import verify
+from webhooks.storage import Storage, StoredEvent
+from webhooks.testing import BackgroundServer
 
 DEMO_SECRET = "cli" + "-" + "demo" + "-" + "secret"
 STRIPE_PLACEHOLDER = "whsec_" + "X" * 28
@@ -302,7 +302,7 @@ def test_cp1252_redirected_output_is_switched_to_utf8(monkeypatch):
     import io
     import sys
 
-    from src.webhooks._stdio import ensure_utf8_stdio
+    from webhooks._stdio import ensure_utf8_stdio
 
     raw = io.BytesIO()
     stream = io.TextIOWrapper(raw, encoding="cp1252")
@@ -311,3 +311,111 @@ def test_cp1252_redirected_output_is_switched_to_utf8(monkeypatch):
     stream.write("\u2500 rule \u2026")
     stream.flush()
     assert raw.getvalue().decode("utf-8") == "\u2500 rule \u2026"
+
+
+# --- serve / forward / export / replay options ------------------------------------------
+def test_serve_prints_banner_and_runs_uvicorn(db, capsys, monkeypatch):
+    import uvicorn
+
+    calls = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.update(app=app, **kw))
+    code = cli.main(["serve", "--db", db, "--port", "8123", "--forward", "github=http://127.0.0.1:3001/webhooks/github"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert calls["port"] == 8123 and calls["host"] == "127.0.0.1"
+    assert "Inspector : http://127.0.0.1:8123/" in out
+    assert "Forwarding: github=http://127.0.0.1:3001/webhooks/github" in out
+
+
+def test_serve_reads_host_and_port_from_env_file(tmp_path, capsys, monkeypatch):
+    import uvicorn
+
+    calls = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.update(kw))
+    (tmp_path / ".env").write_text("WEBHOOK_PORT=8456\nWEBHOOK_DB=from-env.db\n", encoding="utf-8")
+    assert cli.main(["serve"]) == 0
+    assert calls["port"] == 8456
+    assert "Database  : from-env.db" in capsys.readouterr().out
+
+
+def test_forward_rejects_invalid_targets(db, capsys):
+    assert cli.main(["forward", "--db", db, "--to", "paypal=http://x/y"]) == 2
+    assert "invalid forward target" in capsys.readouterr().err
+
+
+def test_export_writes_a_fixture(db, tmp_path, capsys):
+    _store_stripe_event(db)
+    out_file = tmp_path / "out.json"
+    assert cli.main(["export", str(out_file), "--db", db]) == 0
+    import json
+
+    assert json.loads(out_file.read_text(encoding="utf-8"))["count"] == 1
+    assert "Exported 1 events" in capsys.readouterr().out
+
+
+def test_replay_with_edited_body_and_header_file(db, tmp_path, capsys):
+    os.environ["STRIPE_WEBHOOK_SECRET"] = DEMO_SECRET
+    handler = load_handler("stripe_payment_handler", secret=DEMO_SECRET)
+    event_id = _store_stripe_event(db)
+    edited = tmp_path / "edited.json"
+    edited.write_bytes(STRIPE_BODY.replace(b"2000", b"9900"))
+    with BackgroundServer(handler.app) as server:
+        code = cli.main([
+            "replay", str(event_id), "--db", db, "--to", server.url + "/webhooks/stripe",
+            "--sign", "--body", str(edited), "--header", "X-Debug: 1",
+        ])
+    assert code == 0 and "status 200" in capsys.readouterr().out
+
+
+def test_replay_generic_provider_resigns_with_env_scheme(db, capsys):
+    os.environ.update(GENERIC_WEBHOOK_SECRET=DEMO_SECRET, GENERIC_WEBHOOK_HEADER="X-Acme-Signature")
+    Storage(db).insert(StoredEvent(method="POST", path="/acme", headers={}, body=b"{}"))
+    port_holder = {}
+    from fastapi import FastAPI, Request
+
+    app = FastAPI()
+
+    @app.post("/acme")
+    async def acme(request: Request):
+        body = await request.body()
+        port_holder["ok"] = verify.verify_generic(
+            DEMO_SECRET, body, request.headers.get("x-acme-signature"), verify.GenericScheme("X-Acme-Signature")
+        )
+        return {"ok": port_holder["ok"]}
+
+    with BackgroundServer(app) as server:
+        code = cli.main(["replay", "1", "--db", db, "--to", server.url + "/acme", "--provider", "generic", "--sign"])
+    assert code == 0 and port_holder["ok"] is True
+
+
+def test_invalid_header_argument(db):
+    _store_stripe_event(db)
+    with pytest.raises(SystemExit, match="expected 'Name: value'"):
+        cli.main(["replay", "1", "--db", db, "--to", "http://127.0.0.1:9/", "--header", "no-colon"])
+
+
+def test_verify_reads_payload_from_stdin(monkeypatch, capsys):
+    import io
+
+    body = b'{"a":1}'
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(body)))
+    signature = verify.sign_github(DEMO_SECRET, body)
+    assert cli.main(["verify", "--provider", "github", "--payload", "-", "--signature", signature, "--secret", DEMO_SECRET]) == 0
+
+
+def test_version_flag(capsys):
+    from webhooks import __version__
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"webhook-toolkit {__version__}"
+
+
+def test_legacy_src_import_path_still_works_from_the_repo_root():
+    import subprocess
+    import sys
+
+    code = "import src.webhooks.verify as v; print(v.verify_github('s', b'x', v.sign_github('s', b'x')))"
+    result = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+    assert result.stdout.strip() == "True", result.stderr

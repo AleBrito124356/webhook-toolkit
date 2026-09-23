@@ -6,9 +6,9 @@ that the freshly attached signatures verify against the same fake secret.
 
 import time
 
-from src.webhooks import verify
-from src.webhooks.replay import build_replay_request
-from src.webhooks.storage import StoredEvent
+from webhooks import verify
+from webhooks.replay import build_replay_request
+from webhooks.storage import StoredEvent
 
 FAKE_SECRET = ("replay" + "-" + "secret").encode("utf-8")
 BODY = b'{"event": "test", "id": 7}'
@@ -160,7 +160,7 @@ def test_chunked_capture_replays_as_valid_http_on_the_wire():
     # Regression: a capture received with chunked framing used to be replayed
     # with BOTH Transfer-Encoding and Content-Length, which strict servers
     # (Node's llhttp) reject as a request-smuggling vector.
-    from src.webhooks.replay import send_replay
+    from webhooks.replay import send_replay
 
     port, captured, thread = _capture_one_request()
     event = _event("github", {"transfer-encoding": "chunked", "content-type": "application/json"})

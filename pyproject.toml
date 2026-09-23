@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webhook-toolkit"
+dynamic = ["version"]
+description = "Receive, verify, inspect and replay webhooks locally: signature diagnostics for GitHub, Stripe, Slack, Shopify and generic HMAC, an offline event simulator, a replay workbench and fan-out forwarding. No tunnel required."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Alejandro Brito" }]
+keywords = ["webhooks", "hmac", "signature", "stripe", "github", "slack", "shopify", "replay", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "fastapi>=0.110,<1.0",
+    "pydantic>=2",
+    "uvicorn>=0.27",
+    "httpx>=0.27",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "coverage>=7"]
+
+[project.scripts]
+webhook-toolkit = "webhooks.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AleBrito124356/webhook-toolkit"
+Issues = "https://github.com/AleBrito124356/webhook-toolkit/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "webhooks.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["webhooks*"]
+
+[tool.setuptools.package-data]
+webhooks = ["templates/*/*.json"]
+
+[tool.coverage.run]
+source = ["webhooks"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

@@ -1,3 +1,4 @@
-# Development dependencies (tests). Includes the runtime deps.
+# Development dependencies (tests + coverage). Includes the runtime deps.
 -r requirements.txt
 pytest>=8.0
+coverage>=7
