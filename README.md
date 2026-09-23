@@ -169,6 +169,7 @@ python cli.py serve --port 8000
 ──────────────────────── webhook-toolkit ────────────────────────
 Inspector : http://127.0.0.1:8000/
 Receiver  : any method on http://127.0.0.1:8000/<any-path>
+API       : http://127.0.0.1:8000/api/events
 Database  : webhooks.db
 ──────────────────────────────────────────────────────────────────
 ```
@@ -278,9 +279,9 @@ printed as soon as that target finishes, with running totals, and the same
 counters are served at `GET /api/forward` and shown in the inspector:
 
 ```
-#1 POST /webhooks/github | github | verified | 2057 B | 2026-09-23T16:53:25.046283Z
-   forward #1 -> github=http://127.0.0.1:3001/webhooks/github 200 ok (1 attempt, 6 ms) | totals: 1 delivered, 0 failed
-   forward #1 -> http://127.0.0.1:3003/everything HTTP 503 (2 attempts, 60 ms) | totals: 0 delivered, 1 failed
+#1 POST /webhooks/github | github | verified | 2057 B | 2026-09-23T17:12:23.870210Z
+   forward #1 -> github=http://127.0.0.1:3001/webhooks/github 200 ok (1 attempt, 5 ms) | totals: 1 delivered, 0 failed
+   forward #1 -> http://127.0.0.1:3003/everything HTTP 503 (3 attempts, 1510 ms) | totals: 0 delivered, 1 failed
 ```
 
 ### HTTP API
