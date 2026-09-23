@@ -1,0 +1,108 @@
+{
+  "provider": "github",
+  "event": "push",
+  "description": "Commits pushed to a branch",
+  "method": "POST",
+  "path": "/webhooks/github",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "GitHub-Hookshot/{{hex:7}}",
+    "X-GitHub-Delivery": "{{uuid}}",
+    "X-GitHub-Hook-ID": "{{int:9@hook_id}}",
+    "X-GitHub-Hook-Installation-Target-Type": "repository",
+    "X-GitHub-Hook-Installation-Target-ID": "{{int:9@repo_id}}",
+    "X-GitHub-Event": "push"
+  },
+  "body": {
+    "ref": "refs/heads/main",
+    "before": "{{hex:40}}",
+    "after": "{{hex:40@after}}",
+    "repository": {
+      "id": "{{int:9@repo_id}}",
+      "node_id": "R_kgDO{{alnum:8@repo_node}}",
+      "name": "hello-webhooks",
+      "full_name": "octo-org/hello-webhooks",
+      "private": false,
+      "owner": {
+        "login": "octo-org",
+        "id": "{{int:8@org_id}}",
+        "type": "Organization",
+        "html_url": "https://github.com/octo-org"
+      },
+      "html_url": "https://github.com/octo-org/hello-webhooks",
+      "description": "Sample repository used by webhook-toolkit",
+      "fork": false,
+      "url": "https://api.github.com/repos/octo-org/hello-webhooks",
+      "default_branch": "main",
+      "visibility": "public"
+    },
+    "pusher": {
+      "name": "octocat",
+      "email": "mona@example.com"
+    },
+    "sender": {
+      "login": "octocat",
+      "id": "{{int:7@sender_id}}",
+      "type": "User",
+      "html_url": "https://github.com/octocat",
+      "site_admin": false
+    },
+    "created": false,
+    "deleted": false,
+    "forced": false,
+    "base_ref": null,
+    "compare": "https://github.com/octo-org/hello-webhooks/compare/{{hex:12}}...{{hex:12}}",
+    "commits": [
+      {
+        "id": "{{hex:40@after}}",
+        "tree_id": "{{hex:40}}",
+        "distinct": true,
+        "message": "Verify webhook signatures before parsing the payload",
+        "timestamp": "{{now_iso}}",
+        "url": "https://github.com/octo-org/hello-webhooks/commit/{{hex:40@after}}",
+        "author": {
+          "name": "Mona Octocat",
+          "email": "mona@example.com",
+          "username": "octocat"
+        },
+        "committer": {
+          "name": "Mona Octocat",
+          "email": "mona@example.com",
+          "username": "octocat"
+        },
+        "added": [
+          "handlers/github.py"
+        ],
+        "removed": [],
+        "modified": [
+          "README.md"
+        ]
+      }
+    ],
+    "head_commit": {
+      "id": "{{hex:40@after}}",
+      "tree_id": "{{hex:40}}",
+      "distinct": true,
+      "message": "Verify webhook signatures before parsing the payload",
+      "timestamp": "{{now_iso}}",
+      "url": "https://github.com/octo-org/hello-webhooks/commit/{{hex:40@after}}",
+      "author": {
+        "name": "Mona Octocat",
+        "email": "mona@example.com",
+        "username": "octocat"
+      },
+      "committer": {
+        "name": "Mona Octocat",
+        "email": "mona@example.com",
+        "username": "octocat"
+      },
+      "added": [
+        "handlers/github.py"
+      ],
+      "removed": [],
+      "modified": [
+        "README.md"
+      ]
+    }
+  }
+}

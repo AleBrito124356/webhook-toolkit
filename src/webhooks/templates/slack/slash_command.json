@@ -1,0 +1,28 @@
+{
+  "provider": "slack",
+  "event": "slash_command",
+  "description": "A /deploy slash command (form-encoded body)",
+  "method": "POST",
+  "path": "/webhooks/slack/commands",
+  "body_format": "form",
+  "headers": {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+    "X-Slack-Request-Timestamp": "{{now}}"
+  },
+  "body": {
+    "token": "{{alnum:24}}",
+    "team_id": "T{{upper:8@team}}",
+    "team_domain": "example-team",
+    "channel_id": "C{{upper:8}}",
+    "channel_name": "deploys",
+    "user_id": "U{{upper:8}}",
+    "user_name": "mona",
+    "command": "/deploy",
+    "text": "staging --dry-run",
+    "api_app_id": "A{{upper:10}}",
+    "is_enterprise_install": "false",
+    "response_url": "https://hooks.slack.com/commands/T{{upper:8@team}}/{{int:13}}/{{alnum:24}}",
+    "trigger_id": "{{int:13}}.{{int:12}}.{{hex:32}}"
+  }
+}

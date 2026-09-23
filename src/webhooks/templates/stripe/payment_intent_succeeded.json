@@ -1,0 +1,49 @@
+{
+  "provider": "stripe",
+  "event": "payment_intent.succeeded",
+  "description": "A payment was captured",
+  "method": "POST",
+  "path": "/webhooks/stripe",
+  "body_format": "json-pretty",
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "User-Agent": "Stripe/1.0 (+https://stripe.com/docs/webhooks)",
+    "Cache-Control": "no-cache",
+    "Accept": "*/*; q=0.5, application/xml"
+  },
+  "body": {
+    "id": "evt_{{alnum:24}}",
+    "object": "event",
+    "api_version": "2024-06-20",
+    "created": "{{now}}",
+    "data": {
+      "object": {
+        "id": "pi_{{alnum:24@pi}}",
+        "object": "payment_intent",
+        "amount": 2000,
+        "currency": "usd",
+        "customer": "cus_{{alnum:14@customer}}",
+        "description": "Order #1042",
+        "livemode": false,
+        "metadata": {
+          "order_id": "1042"
+        },
+        "payment_method_types": [
+          "card"
+        ],
+        "created": "{{now}}",
+        "amount_received": 2000,
+        "latest_charge": "ch_{{alnum:24}}",
+        "payment_method": "pm_{{alnum:24}}",
+        "status": "succeeded"
+      }
+    },
+    "livemode": false,
+    "pending_webhooks": 1,
+    "request": {
+      "id": "req_{{alnum:14}}",
+      "idempotency_key": "{{uuid}}"
+    },
+    "type": "payment_intent.succeeded"
+  }
+}

@@ -4,9 +4,11 @@ Bodies are stored as raw bytes (BLOB) so a replay reproduces the exact payload
 the provider sent — this matters because signatures are computed over the byte
 stream, and re-encoding through ``str`` would silently break verification.
 
-One connection is opened per operation. That is more than fast enough for a
-local dev tool and sidesteps SQLite's cross-thread connection rules under the
-uvicorn worker threadpool.
+One connection is opened per operation and *closed* when it finishes (the
+``sqlite3`` context manager only commits; it does not close). That is more than
+fast enough for a local dev tool, sidesteps SQLite's cross-thread connection
+rules under the uvicorn worker threadpool, and never leaves the database file
+locked on Windows.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -28,10 +32,17 @@ CREATE TABLE IF NOT EXISTS events (
     body        BLOB    NOT NULL,
     source_ip   TEXT,
     provider    TEXT,
-    verified    INTEGER
+    verified    INTEGER,
+    verify_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at);
 """
+
+# Columns added after the first release, applied with ALTER TABLE to databases
+# created by older versions. Each entry is (column, SQL type).
+MIGRATIONS = [
+    ("verify_reason", "TEXT"),
+]
 
 
 def utcnow_iso() -> str:
@@ -43,8 +54,9 @@ def utcnow_iso() -> str:
 class StoredEvent:
     """A single captured request.
 
-    ``verified`` is ``None`` when no secret was configured, ``1`` when the
-    signature checked out, and ``0`` when it failed.
+    ``verified`` is ``None`` when the signature was not checked (unsigned
+    request, or no real secret configured), ``1`` when it checked out, and
+    ``0`` when it failed. ``verify_reason`` says why, in one line.
     """
 
     method: str
@@ -57,6 +69,7 @@ class StoredEvent:
     provider: str | None = None
     verified: int | None = None
     id: int | None = None
+    verify_reason: str | None = None
 
     # -- header access -----------------------------------------------------
     def header(self, name: str) -> str | None:
@@ -87,6 +100,7 @@ class StoredEvent:
             "source_ip": self.source_ip,
             "provider": self.provider,
             "verified": self.verified,
+            "verify_reason": self.verify_reason,
             "content_type": self.content_type,
             "size": len(self.body),
             "is_json": is_json,
@@ -104,6 +118,7 @@ class StoredEvent:
             "source_ip": self.source_ip,
             "provider": self.provider,
             "verified": self.verified,
+            "verify_reason": self.verify_reason,
             "body_base64": base64.b64encode(self.body).decode("ascii"),
         }
 
@@ -119,6 +134,7 @@ class StoredEvent:
             source_ip=data.get("source_ip"),
             provider=data.get("provider"),
             verified=data.get("verified"),
+            verify_reason=data.get("verify_reason"),
         )
 
 
@@ -134,19 +150,33 @@ class Storage:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextmanager
+    def _session(self) -> Iterator[sqlite3.Connection]:
+        """Open a connection, commit (or roll back) the block, always close."""
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _init_schema(self) -> None:
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.executescript(SCHEMA)
+            existing = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
+            for column, sql_type in MIGRATIONS:
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE events ADD COLUMN {column} {sql_type}")
 
     # -- writes ------------------------------------------------------------
     def insert(self, event: StoredEvent) -> int:
-        with self._connect() as conn:
+        with self._session() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO events
                     (received_at, method, path, query, headers, body,
-                     source_ip, provider, verified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source_ip, provider, verified, verify_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.received_at,
@@ -158,18 +188,19 @@ class Storage:
                     event.source_ip,
                     event.provider,
                     event.verified,
+                    event.verify_reason,
                 ),
             )
             event.id = int(cursor.lastrowid)
             return event.id
 
     def delete(self, event_id: int) -> bool:
-        with self._connect() as conn:
+        with self._session() as conn:
             cursor = conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
             return cursor.rowcount > 0
 
     def clear(self) -> int:
-        with self._connect() as conn:
+        with self._session() as conn:
             cursor = conn.execute("DELETE FROM events")
             return cursor.rowcount
 
@@ -187,29 +218,83 @@ class Storage:
             source_ip=row["source_ip"],
             provider=row["provider"],
             verified=row["verified"],
+            verify_reason=row["verify_reason"],
         )
 
     def get(self, event_id: int) -> StoredEvent | None:
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute(
                 "SELECT * FROM events WHERE id = ?", (event_id,)
             ).fetchone()
         return self._row_to_event(row) if row else None
 
-    def list(self, limit: int = 100, offset: int = 0) -> list[StoredEvent]:
-        with self._connect() as conn:
+    @staticmethod
+    def _where(
+        provider: str | None = None,
+        verified: str | int | None = None,
+        path_contains: str | None = None,
+    ) -> tuple[str, list]:
+        """SQL filter for list/count.
+
+        ``provider``: a provider name, or ``"unsigned"`` for requests without
+        one. ``verified``: ``1`` / ``0`` / ``"none"`` (not checked).
+        ``path_contains``: case-insensitive substring of the path.
+        """
+        clauses: list[str] = []
+        params: list = []
+        if provider:
+            if provider == "unsigned":
+                clauses.append("provider IS NULL")
+            else:
+                clauses.append("provider = ?")
+                params.append(provider)
+        if verified is not None and verified != "":
+            value = str(verified).lower()
+            if value in ("none", "null", "unchecked"):
+                clauses.append("verified IS NULL")
+            elif value in ("1", "0"):
+                clauses.append("verified = ?")
+                params.append(int(value))
+            else:
+                raise ValueError(f"verified filter must be 1, 0 or none, not {verified!r}")
+        if path_contains:
+            escaped = (
+                path_contains.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            )
+            clauses.append("path LIKE ? ESCAPE '!'")
+            params.append(f"%{escaped}%")
+        return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+    def list(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        provider: str | None = None,
+        verified: str | int | None = None,
+        path_contains: str | None = None,
+    ) -> list[StoredEvent]:
+        where, params = self._where(provider, verified, path_contains)
+        with self._session() as conn:
             rows = conn.execute(
-                "SELECT * FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                f"SELECT * FROM events{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             ).fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def all(self) -> list[StoredEvent]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
         return [self._row_to_event(row) for row in rows]
 
-    def count(self) -> int:
-        with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()
+    def count(
+        self,
+        *,
+        provider: str | None = None,
+        verified: str | int | None = None,
+        path_contains: str | None = None,
+    ) -> int:
+        where, params = self._where(provider, verified, path_contains)
+        with self._session() as conn:
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM events{where}", params).fetchone()
         return int(row["n"])

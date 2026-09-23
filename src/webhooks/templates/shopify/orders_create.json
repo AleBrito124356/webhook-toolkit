@@ -1,0 +1,55 @@
+{
+  "provider": "shopify",
+  "event": "orders/create",
+  "description": "A new order was placed",
+  "method": "POST",
+  "path": "/webhooks/shopify",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "Shopify-Captain-Hook",
+    "X-Shopify-Shop-Domain": "example-shop.myshopify.com",
+    "X-Shopify-API-Version": "2024-07",
+    "X-Shopify-Webhook-Id": "{{uuid}}",
+    "X-Shopify-Event-Id": "{{uuid}}",
+    "X-Shopify-Triggered-At": "{{now_iso}}",
+    "X-Shopify-Topic": "orders/create"
+  },
+  "body": {
+    "id": "{{int:13@order_id}}",
+    "admin_graphql_api_id": "gid://shopify/Order/{{int:13@order_id}}",
+    "name": "#1042",
+    "order_number": 1042,
+    "email": "jane.doe@example.com",
+    "created_at": "{{now_iso}}",
+    "currency": "USD",
+    "financial_status": "paid",
+    "fulfillment_status": null,
+    "subtotal_price": "49.90",
+    "total_tax": "0.00",
+    "total_price": "59.90",
+    "line_items": [
+      {
+        "id": "{{int:13}}",
+        "product_id": "{{int:13}}",
+        "variant_id": "{{int:13}}",
+        "title": "Webhook T-Shirt",
+        "variant_title": "M",
+        "sku": "WH-TEE-M",
+        "quantity": 1,
+        "price": "49.90"
+      }
+    ],
+    "shipping_lines": [
+      {
+        "title": "Standard",
+        "price": "10.00"
+      }
+    ],
+    "customer": {
+      "id": "{{int:13}}",
+      "email": "jane.doe@example.com",
+      "first_name": "Jane",
+      "last_name": "Doe"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "provider": "shopify",
+  "event": "app/uninstalled",
+  "description": "The shop uninstalled your app",
+  "method": "POST",
+  "path": "/webhooks/shopify",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "Shopify-Captain-Hook",
+    "X-Shopify-Shop-Domain": "example-shop.myshopify.com",
+    "X-Shopify-API-Version": "2024-07",
+    "X-Shopify-Webhook-Id": "{{uuid}}",
+    "X-Shopify-Event-Id": "{{uuid}}",
+    "X-Shopify-Triggered-At": "{{now_iso}}",
+    "X-Shopify-Topic": "app/uninstalled"
+  },
+  "body": {
+    "id": "{{int:9}}",
+    "name": "Example Shop",
+    "email": "owner@example.com",
+    "domain": "example-shop.myshopify.com",
+    "myshopify_domain": "example-shop.myshopify.com",
+    "country_code": "US",
+    "currency": "USD",
+    "plan_name": "basic",
+    "shop_owner": "Jane Doe",
+    "created_at": "{{now_iso}}",
+    "updated_at": "{{now_iso}}"
+  }
+}

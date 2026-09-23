@@ -1,0 +1,64 @@
+{
+  "provider": "github",
+  "event": "ping",
+  "description": "Sent once when a webhook is created",
+  "method": "POST",
+  "path": "/webhooks/github",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "GitHub-Hookshot/{{hex:7}}",
+    "X-GitHub-Delivery": "{{uuid}}",
+    "X-GitHub-Hook-ID": "{{int:9@hook_id}}",
+    "X-GitHub-Hook-Installation-Target-Type": "repository",
+    "X-GitHub-Hook-Installation-Target-ID": "{{int:9@repo_id}}",
+    "X-GitHub-Event": "ping"
+  },
+  "body": {
+    "zen": "Design for failure.",
+    "hook_id": "{{int:9@hook_id}}",
+    "hook": {
+      "type": "Repository",
+      "id": "{{int:9@hook_id}}",
+      "name": "web",
+      "active": true,
+      "events": [
+        "push",
+        "pull_request",
+        "issues"
+      ],
+      "config": {
+        "content_type": "json",
+        "insecure_ssl": "0",
+        "url": "https://example.com/webhooks/github"
+      },
+      "created_at": "{{now_iso}}",
+      "updated_at": "{{now_iso}}"
+    },
+    "repository": {
+      "id": "{{int:9@repo_id}}",
+      "node_id": "R_kgDO{{alnum:8@repo_node}}",
+      "name": "hello-webhooks",
+      "full_name": "octo-org/hello-webhooks",
+      "private": false,
+      "owner": {
+        "login": "octo-org",
+        "id": "{{int:8@org_id}}",
+        "type": "Organization",
+        "html_url": "https://github.com/octo-org"
+      },
+      "html_url": "https://github.com/octo-org/hello-webhooks",
+      "description": "Sample repository used by webhook-toolkit",
+      "fork": false,
+      "url": "https://api.github.com/repos/octo-org/hello-webhooks",
+      "default_branch": "main",
+      "visibility": "public"
+    },
+    "sender": {
+      "login": "octocat",
+      "id": "{{int:7@sender_id}}",
+      "type": "User",
+      "html_url": "https://github.com/octocat",
+      "site_admin": false
+    }
+  }
+}

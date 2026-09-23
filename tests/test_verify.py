@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from src.webhooks import verify
+from webhooks import verify
 
 # Built from parts so nothing on disk resembles a real signing secret.
 FAKE_SECRET = ("test" + "-" + "secret" + "-" + "not-real").encode("utf-8")
