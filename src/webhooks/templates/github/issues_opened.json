@@ -1,0 +1,71 @@
+{
+  "provider": "github",
+  "event": "issues.opened",
+  "description": "An issue was opened",
+  "method": "POST",
+  "path": "/webhooks/github",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "GitHub-Hookshot/{{hex:7}}",
+    "X-GitHub-Delivery": "{{uuid}}",
+    "X-GitHub-Hook-ID": "{{int:9@hook_id}}",
+    "X-GitHub-Hook-Installation-Target-Type": "repository",
+    "X-GitHub-Hook-Installation-Target-ID": "{{int:9@repo_id}}",
+    "X-GitHub-Event": "issues"
+  },
+  "body": {
+    "action": "opened",
+    "issue": {
+      "url": "https://api.github.com/repos/octo-org/hello-webhooks/issues/{{int:3@issue_number}}",
+      "html_url": "https://github.com/octo-org/hello-webhooks/issues/{{int:3@issue_number}}",
+      "id": "{{int:10}}",
+      "number": "{{int:3@issue_number}}",
+      "title": "Stripe replay fails with 400 after five minutes",
+      "body": "Replaying an old capture without --sign is rejected by the handler.",
+      "user": {
+        "login": "octocat",
+        "id": "{{int:7@sender_id}}",
+        "type": "User",
+        "html_url": "https://github.com/octocat",
+        "site_admin": false
+      },
+      "labels": [
+        {
+          "name": "bug",
+          "color": "d73a4a"
+        }
+      ],
+      "state": "open",
+      "locked": false,
+      "comments": 0,
+      "created_at": "{{now_iso}}",
+      "updated_at": "{{now_iso}}"
+    },
+    "repository": {
+      "id": "{{int:9@repo_id}}",
+      "node_id": "R_kgDO{{alnum:8@repo_node}}",
+      "name": "hello-webhooks",
+      "full_name": "octo-org/hello-webhooks",
+      "private": false,
+      "owner": {
+        "login": "octo-org",
+        "id": "{{int:8@org_id}}",
+        "type": "Organization",
+        "html_url": "https://github.com/octo-org"
+      },
+      "html_url": "https://github.com/octo-org/hello-webhooks",
+      "description": "Sample repository used by webhook-toolkit",
+      "fork": false,
+      "url": "https://api.github.com/repos/octo-org/hello-webhooks",
+      "default_branch": "main",
+      "visibility": "public"
+    },
+    "sender": {
+      "login": "octocat",
+      "id": "{{int:7@sender_id}}",
+      "type": "User",
+      "html_url": "https://github.com/octocat",
+      "site_admin": false
+    }
+  }
+}

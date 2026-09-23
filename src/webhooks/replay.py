@@ -13,6 +13,8 @@ when a secret is supplied.
 
 from __future__ import annotations
 
+import functools
+import ssl
 import time
 from dataclasses import dataclass
 
@@ -113,11 +115,15 @@ def _has_header(headers: dict[str, str], name: str) -> bool:
     return any(existing.lower() == name.lower() for existing in headers)
 
 
-def _set_header(headers: dict[str, str], name: str, value: str) -> None:
+def set_header(headers: dict[str, str], name: str, value: str) -> None:
+    """Set ``name`` in ``headers``, replacing any existing key case-insensitively."""
     for existing in list(headers):
         if existing.lower() == name.lower():
             del headers[existing]
     headers[name] = value
+
+
+_set_header = set_header
 
 
 def build_replay_request(
@@ -168,11 +174,39 @@ def build_replay_request(
     )
 
 
-def send_replay(request: ReplayRequest, *, timeout: float = 10.0) -> ReplayResult:
-    """Send a prepared :class:`ReplayRequest` and capture the outcome."""
+@functools.lru_cache(maxsize=1)
+def default_ssl_context() -> ssl.SSLContext:
+    """The TLS context for outgoing requests, built once.
+
+    Building it loads the CA bundle, which costs ~150 ms per HTTP client on
+    Windows; reusing it makes a replay to a local handler take a few ms.
+    """
+    return httpx.create_ssl_context()
+
+
+def make_client(
+    *, timeout: float = 10.0, transport: httpx.BaseTransport | None = None
+) -> httpx.Client:
+    """An ``httpx.Client`` for replays/forwards (``transport`` is for tests)."""
+    return httpx.Client(timeout=timeout, verify=default_ssl_context(), transport=transport)
+
+
+def send_replay(
+    request: ReplayRequest,
+    *,
+    timeout: float = 10.0,
+    client: httpx.Client | None = None,
+) -> ReplayResult:
+    """Send a prepared :class:`ReplayRequest` and capture the outcome.
+
+    Pass ``client`` to reuse one connection pool across many sends.
+    """
+    if client is None:
+        with make_client(timeout=timeout) as own_client:
+            return send_replay(request, timeout=timeout, client=own_client)
     start = time.perf_counter()
     try:
-        response = httpx.request(
+        response = client.request(
             request.method,
             request.url,
             headers=request.headers,

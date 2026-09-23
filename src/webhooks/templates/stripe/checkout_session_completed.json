@@ -1,0 +1,49 @@
+{
+  "provider": "stripe",
+  "event": "checkout.session.completed",
+  "description": "A Checkout Session finished successfully",
+  "method": "POST",
+  "path": "/webhooks/stripe",
+  "body_format": "json-pretty",
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "User-Agent": "Stripe/1.0 (+https://stripe.com/docs/webhooks)",
+    "Cache-Control": "no-cache",
+    "Accept": "*/*; q=0.5, application/xml"
+  },
+  "body": {
+    "id": "evt_{{alnum:24}}",
+    "object": "event",
+    "api_version": "2024-06-20",
+    "created": "{{now}}",
+    "data": {
+      "object": {
+        "id": "cs_test_{{alnum:40}}",
+        "object": "checkout.session",
+        "amount_subtotal": 4990,
+        "amount_total": 5990,
+        "currency": "usd",
+        "customer": "cus_{{alnum:14}}",
+        "customer_details": {
+          "email": "jenny.rosen@example.com",
+          "name": "Jenny Rosen"
+        },
+        "client_reference_id": "cart_1042",
+        "livemode": false,
+        "mode": "payment",
+        "payment_intent": "pi_{{alnum:24}}",
+        "payment_status": "paid",
+        "status": "complete",
+        "success_url": "https://example.com/checkout/success",
+        "created": "{{now}}"
+      }
+    },
+    "livemode": false,
+    "pending_webhooks": 1,
+    "request": {
+      "id": "req_{{alnum:14}}",
+      "idempotency_key": "{{uuid}}"
+    },
+    "type": "checkout.session.completed"
+  }
+}

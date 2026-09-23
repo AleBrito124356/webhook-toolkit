@@ -1,0 +1,63 @@
+{
+  "provider": "stripe",
+  "event": "invoice.paid",
+  "description": "A subscription invoice was paid",
+  "method": "POST",
+  "path": "/webhooks/stripe",
+  "body_format": "json-pretty",
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "User-Agent": "Stripe/1.0 (+https://stripe.com/docs/webhooks)",
+    "Cache-Control": "no-cache",
+    "Accept": "*/*; q=0.5, application/xml"
+  },
+  "body": {
+    "id": "evt_{{alnum:24}}",
+    "object": "event",
+    "api_version": "2024-06-20",
+    "created": "{{now}}",
+    "data": {
+      "object": {
+        "id": "in_{{alnum:24}}",
+        "object": "invoice",
+        "amount_due": 1500,
+        "amount_paid": 1500,
+        "amount_remaining": 0,
+        "billing_reason": "subscription_cycle",
+        "currency": "usd",
+        "customer": "cus_{{alnum:14}}",
+        "customer_email": "jenny.rosen@example.com",
+        "number": "WHK-{{int:4}}",
+        "paid": true,
+        "status": "paid",
+        "subscription": "sub_{{alnum:24}}",
+        "lines": {
+          "object": "list",
+          "data": [
+            {
+              "id": "il_{{alnum:24}}",
+              "object": "line_item",
+              "amount": 1500,
+              "currency": "usd",
+              "description": "1 x Pro plan (at $15.00 / month)",
+              "quantity": 1,
+              "type": "subscription"
+            }
+          ],
+          "has_more": false,
+          "total_count": 1
+        },
+        "period_start": "{{now}}",
+        "period_end": "{{now}}",
+        "created": "{{now}}"
+      }
+    },
+    "livemode": false,
+    "pending_webhooks": 1,
+    "request": {
+      "id": "req_{{alnum:14}}",
+      "idempotency_key": "{{uuid}}"
+    },
+    "type": "invoice.paid"
+  }
+}

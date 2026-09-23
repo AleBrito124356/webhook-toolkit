@@ -31,7 +31,7 @@ from .inbound import assess
 from .storage import Storage, StoredEvent
 from .verify import GenericScheme, detect_provider
 
-console = Console()
+console = Console(soft_wrap=True, highlight=False)
 
 # Methods the receiver accepts. Webhooks are almost always POST, but capturing
 # the rest makes the tool useful for debugging arbitrary callbacks too (HEAD

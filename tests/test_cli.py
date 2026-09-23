@@ -296,3 +296,18 @@ def test_list_shows_reason_column(db, capsys):
 def test_list_empty(db, capsys):
     assert cli.main(["list", "--db", db]) == 0
     assert "No events captured yet" in capsys.readouterr().out
+
+
+def test_cp1252_redirected_output_is_switched_to_utf8(monkeypatch):
+    import io
+    import sys
+
+    from src.webhooks._stdio import ensure_utf8_stdio
+
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", stream)
+    ensure_utf8_stdio()
+    stream.write("\u2500 rule \u2026")
+    stream.flush()
+    assert raw.getvalue().decode("utf-8") == "\u2500 rule \u2026"

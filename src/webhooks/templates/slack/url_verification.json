@@ -1,0 +1,17 @@
+{
+  "provider": "slack",
+  "event": "url_verification",
+  "description": "Events API handshake: answer with the challenge",
+  "method": "POST",
+  "path": "/webhooks/slack/events",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+    "X-Slack-Request-Timestamp": "{{now}}"
+  },
+  "body": {
+    "token": "{{alnum:24}}",
+    "challenge": "{{alnum:48}}",
+    "type": "url_verification"
+  }
+}

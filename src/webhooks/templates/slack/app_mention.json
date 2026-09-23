@@ -1,0 +1,38 @@
+{
+  "provider": "slack",
+  "event": "app_mention",
+  "description": "Events API callback: the app was @-mentioned",
+  "method": "POST",
+  "path": "/webhooks/slack/events",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+    "X-Slack-Request-Timestamp": "{{now}}"
+  },
+  "body": {
+    "token": "{{alnum:24}}",
+    "team_id": "T{{upper:8@team}}",
+    "api_app_id": "A{{upper:10@app}}",
+    "event": {
+      "type": "app_mention",
+      "user": "U{{upper:8@user}}",
+      "text": "<@U{{upper:8@bot}}> can you replay the last Stripe event?",
+      "ts": "{{now}}.000200",
+      "channel": "C{{upper:8@channel}}",
+      "event_ts": "{{now}}.000200"
+    },
+    "type": "event_callback",
+    "event_id": "Ev{{upper:10}}",
+    "event_time": "{{now}}",
+    "authorizations": [
+      {
+        "enterprise_id": null,
+        "team_id": "T{{upper:8@team}}",
+        "user_id": "U{{upper:8@bot}}",
+        "is_bot": true,
+        "is_enterprise_install": false
+      }
+    ],
+    "is_ext_shared_channel": false
+  }
+}

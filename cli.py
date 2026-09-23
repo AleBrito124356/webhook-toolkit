@@ -9,6 +9,8 @@ Commands
   verify     Check a payload + signature pair and explain why it fails.
   list       Show recent captured events.
   show       Show one stored event with a signature diagnosis.
+  samples    List the bundled sample events.
+  send       Send (or store) a realistic, signed sample event offline.
   export     Write all stored events to a JSON fixture file.
   import     Load events from a JSON fixture file.
 
@@ -32,8 +34,10 @@ from rich.table import Table  # noqa: E402
 
 from src.webhooks import config  # noqa: E402
 from src.webhooks import fixtures  # noqa: E402
+from src.webhooks._stdio import ensure_utf8_stdio  # noqa: E402
 from src.webhooks.inbound import assess  # noqa: E402
-from src.webhooks.replay import replay_event  # noqa: E402
+from src.webhooks import samples as sample_catalog  # noqa: E402
+from src.webhooks.replay import make_client, replay_event, send_replay  # noqa: E402
 from src.webhooks.server import serve  # noqa: E402
 from src.webhooks.storage import Storage, StoredEvent  # noqa: E402
 from src.webhooks.verify import (  # noqa: E402
@@ -307,6 +311,123 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_samples(args: argparse.Namespace) -> int:
+    templates = sample_catalog.list_samples(args.provider)
+    if not templates:
+        err.print(
+            f"[red]No samples for {args.provider!r}; providers with samples: "
+            f"{', '.join(sample_catalog.providers())}[/]"
+        )
+        return 2
+    table = Table(title=f"{len(templates)} sample events (send one with: send <provider> <event>)")
+    table.add_column("provider")
+    table.add_column("event")
+    table.add_column("path")
+    table.add_column("content type")
+    table.add_column("description", overflow="fold")
+    for template in templates:
+        table.add_row(
+            template.provider,
+            template.event,
+            template.path,
+            template.content_type.split(";")[0],
+            template.description,
+        )
+    console.print(table)
+    return 0
+
+
+def _sample_secret(args: argparse.Namespace, provider: str) -> tuple[int, str | None, str]:
+    """Resolve the signing secret for ``send``: (exit code, secret, label)."""
+    if args.secret is not None:
+        return 0, args.secret, "--secret"
+    if args.sign:
+        secret = _resolve_secret(provider, purpose="send --sign")
+        if secret is None:
+            return 2, None, ""
+        return 0, secret, config.secret_status(provider).env_var or provider
+    return 0, None, "unsigned"
+
+
+def cmd_send(args: argparse.Namespace) -> int:
+    try:
+        template = sample_catalog.get_sample(args.provider, args.event)
+    except KeyError as exc:
+        err.print(f"[red]{escape(exc.args[0])}[/]")
+        return 2
+    if not (args.to or args.store or args.dry_run):
+        err.print("[red]send: pass --to URL (deliver), --store (save to the database) or --dry-run.[/]")
+        return 2
+    if args.count < 1:
+        err.print("[red]--count must be at least 1[/]")
+        return 2
+    code, secret, secret_label = _sample_secret(args, template.provider)
+    if code:
+        return code
+    if secret is None and not args.dry_run:
+        err.print(
+            "[yellow]note: the event is unsigned (pass --sign or --secret); a verifying "
+            "handler will reject it.[/]"
+        )
+    extra_headers = _parse_headers(args.header)
+    storage = Storage(args.db) if args.store else None
+    with make_client(timeout=args.timeout) as client:
+        return _send_samples(args, template, secret, secret_label, extra_headers, storage, client)
+
+
+def _send_samples(args, template, secret, secret_label, extra_headers, storage, client) -> int:
+    failures = 0
+    for number in range(1, args.count + 1):
+        try:
+            rendered = sample_catalog.render_sample(template, overrides=args.set, now=args.now)
+        except ValueError as exc:
+            err.print(f"[red]{escape(str(exc))}[/]")
+            return 2
+        request = sample_catalog.build_sample_request(
+            rendered,
+            args.to or "http://127.0.0.1" + template.path,
+            secret=secret.encode("utf-8") if secret is not None else None,
+            now=args.now,
+            extra_headers=extra_headers,
+        )
+        name = f"{template.provider}/{template.event}"
+        signed = f"signed ({secret_label})" if secret is not None else "unsigned"
+        if args.dry_run:
+            console.print(f"[bold]{request.method}[/] {escape(request.url)}")
+            for header, value in request.headers.items():
+                console.print(f"[dim]{escape(header)}:[/] {escape(value)}")
+            console.print()
+            sys.stdout.flush()
+            sys.stdout.buffer.write(request.body + b"\n")
+            sys.stdout.buffer.flush()
+            continue
+        if storage is not None:
+            stored = rendered.to_stored_event(request.headers)
+            assessment = assess(stored)
+            stored.verified = assessment.verified
+            stored.verify_reason = assessment.reason
+            storage.insert(stored)
+            console.print(
+                f"[green]stored[/] {name} as [bold cyan]#{stored.id}[/] [dim]| {signed} | "
+                f"{escape(assessment.reason)}[/]"
+            )
+        if args.to:
+            result = send_replay(request, timeout=args.timeout, client=client)
+            tag = "[green]OK[/]" if result.ok else "[red]FAIL[/]"
+            console.print(
+                f"{tag} sent {name}"
+                + (f" ({number}/{args.count})" if args.count > 1 else "")
+                + f" -> {escape(result.url)} [dim]| status {result.status_code} | "
+                f"{result.elapsed_ms:.0f} ms | {signed}[/]"
+            )
+            if result.error:
+                console.print(f"  [red]{escape(result.error)}[/]")
+            elif not result.ok and result.response_snippet:
+                console.print(f"  [dim]{escape(result.response_snippet)}[/]")
+            failures += 0 if result.ok else 1
+    return 1 if failures else 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     storage = Storage(args.db)
     count = fixtures.export_to_file(storage, args.file)
@@ -426,6 +547,38 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--json", action="store_true", help="print the event and diagnosis as JSON")
     p_show.set_defaults(func=cmd_show)
 
+    p_samples = add_parser("samples", help="list the bundled sample events")
+    p_samples.add_argument("provider", nargs="?", help="only this provider")
+    p_samples.set_defaults(func=cmd_samples)
+
+    p_send = add_parser(
+        "send",
+        help="send a realistic, signed sample event (offline, no provider needed)",
+        description=(
+            "Render a bundled sample (fresh ids and timestamps), optionally sign it, and "
+            "deliver it to --to URL and/or save it with --store. A URL without a path "
+            "(http://127.0.0.1:8000) uses the sample's own path."
+        ),
+    )
+    add_db(p_send)
+    p_send.add_argument("provider", help="github, stripe, slack or shopify")
+    p_send.add_argument("event", help="sample event name, see the samples command")
+    p_send.add_argument("--to", metavar="URL", help="deliver to URL")
+    p_send.add_argument("--store", action="store_true", help="save the event in the database")
+    p_send.add_argument("--dry-run", action="store_true", help="print the request instead")
+    sign = p_send.add_mutually_exclusive_group()
+    sign.add_argument("--secret", help="sign with this secret")
+    sign.add_argument("--sign", action="store_true", help="sign with the provider's configured secret")
+    p_send.add_argument("--set", action="append", default=[], metavar="PATH=VALUE",
+                        help="override a body field, e.g. data.object.amount=5000 (repeatable; "
+                             "VALUE is parsed as JSON when possible)")
+    p_send.add_argument("--header", action="append", default=[], metavar="'Name: value'",
+                        help="add/override a header (repeatable)")
+    p_send.add_argument("--count", type=int, default=1, help="send N fresh copies")
+    p_send.add_argument("--now", type=int, help="pin the timestamp (Unix seconds) used in the body and signature")
+    p_send.add_argument("--timeout", type=float, default=10.0)
+    p_send.set_defaults(func=cmd_send)
+
     p_export = add_parser("export", help="export stored events to a fixture")
     add_db(p_export)
     p_export.add_argument("file", help="output JSON file")
@@ -457,6 +610,7 @@ def _load_env(argv: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     status = _load_env(argv)
     if status:

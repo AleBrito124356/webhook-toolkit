@@ -102,14 +102,37 @@ a plainly-fake string — that no provider will accept. The toolkit treats them
 explicitly:
 
 - the **receiver** never labels a capture `invalid` because of a placeholder (a
-  real provider cannot sign with one); it shows `no secret` instead, and only
+  real provider cannot sign with one); it shows `not checked` instead, and only
   shows `verified` when the capture really was signed with that placeholder;
-- **explicit commands** (`verify`, `replay --sign`) still use a placeholder, with
+- **explicit commands** (`verify`, `replay --sign`, `send --sign`) still use a placeholder, with
   a visible warning, so the local walkthrough against the bundled example
   handlers (which fall back to the same placeholders) works before you have
   real secrets.
 
 ## The no-tunnel workflow
+
+### See the whole loop in one command
+
+```bash
+python examples/offline_demo.py
+```
+
+The demo starts the receiver and both example handlers on ephemeral loopback
+ports, generates fresh random secrets, and then checks every feature for real:
+all 14 bundled samples are signed, delivered and verified; a tampered, a
+wrongly-signed and an hour-old delivery are each diagnosed; stored events are
+replayed to the handlers with and without re-signing and with an edited body;
+and samples are sent straight to the handlers. It ends with:
+
+```
+PASS --set overrides change the body and the signature still verifies - amount=125000 currency=eur
+──────────────────── 5. The inspector API has every capture ────────────────────
+PASS GET /api/events reports the true total - 17 events stored
+─────────────────────────────────── Summary ────────────────────────────────────
+28/28 checks passed in 1.9 s, loopback only, no tunnel and no provider account.
+```
+
+### Do it yourself
 
 **1. Start the receiver + inspector.**
 
@@ -125,19 +148,49 @@ Database  : webhooks.db
 ──────────────────────────────────────────────────────────────────
 ```
 
-Open `http://127.0.0.1:8000/` for the live inspector. Every capture appears with
-a `verified` / `invalid` / `no secret` badge and an expandable body + headers.
+Open `http://127.0.0.1:8000/` for the live inspector.
 
-**2. Get one real delivery** (or skip straight to the bundled fixture). Trigger
-the event once from the provider dashboard, or — if you already have a tunnel for
-a single capture — send it here. Each capture prints to the console:
+**2. Generate realistic, signed events — no provider needed.** `samples` lists
+the bundled events; `send` renders one with fresh ids and timestamps, adds the
+provider's real companion headers (`X-GitHub-Event`, `X-GitHub-Delivery`,
+`X-Shopify-Topic`, `X-Slack-Request-Timestamp`, ...), signs it and delivers it.
+A URL without a path uses the sample's own path.
+
+```bash
+python cli.py samples                     # 14 events: GitHub, Stripe, Slack, Shopify
+python cli.py send github push --to http://127.0.0.1:8000 --sign
+python cli.py send stripe payment_intent.succeeded --to http://127.0.0.1:8000 --secret whsec_wrong
+```
 
 ```
-#1 POST /webhooks/github | github | verified | 512 B | 2026-07-19T15:04:11Z
+OK sent github/push -> http://127.0.0.1:8000/webhooks/github | status 200 | 10 ms | signed (GITHUB_WEBHOOK_SECRET)
+OK sent stripe/payment_intent.succeeded -> http://127.0.0.1:8000/webhooks/stripe | status 200 | 11 ms | signed (--secret)
 ```
 
-**3. Replay it at your handler as many times as you want**, re-signing so it
-verifies against your handler's secret:
+and the receiver's console explains the second one:
+
+```
+#1 POST /webhooks/github | github | verified | 2057 B | 2026-09-23T16:42:14.979419Z
+#2 POST /webhooks/stripe | stripe | invalid | 890 B | 2026-09-23T16:42:15.798059Z
+   signature does not match this body and secret
+```
+
+| Provider | Sample events |
+|---|---|
+| GitHub | `ping`, `push`, `pull_request.opened`, `issues.opened` |
+| Stripe | `payment_intent.succeeded`, `payment_intent.payment_failed`, `checkout.session.completed`, `invoice.paid` |
+| Slack | `url_verification`, `app_mention` (Events API, JSON), `slash_command` (form-encoded) |
+| Shopify | `orders/create`, `products/update`, `app/uninstalled` |
+
+Useful `send` options: `--set data.object.amount=5000` edits a body field
+before signing (dotted path, list indices allowed, value parsed as JSON when
+possible), `--count N` sends N fresh copies, `--store` saves the event straight
+into the database instead of (or as well as) sending it, `--dry-run` prints the
+exact request, and `--now <epoch>` signs with an old timestamp to reproduce a
+stale delivery.
+
+**3. Replay any capture at your handler as many times as you want**,
+re-signing so it verifies against your handler's secret:
 
 ```bash
 python cli.py replay 1 --to http://127.0.0.1:3001/webhooks/github --sign
@@ -147,7 +200,9 @@ python cli.py replay 1 --to http://127.0.0.1:3001/webhooks/github --sign
 OK replay #1 -> http://127.0.0.1:3001/webhooks/github (re-signed) | status 200 | 7 ms
 ```
 
-No provider round-trip, no tunnel, fully reproducible.
+A real provider delivery works the same way: capture it once (dashboard
+"resend", or one tunnelled delivery) and replay it forever. No provider
+round-trip, no tunnel, fully reproducible.
 
 ## Usage
 
