@@ -53,6 +53,30 @@ def _parse_headers(pairs: list[str]) -> dict[str, str]:
     return headers
 
 
+def _resolve_secret(provider: str, *, purpose: str) -> str | None:
+    """Return the configured secret for an explicit action, or print why not.
+
+    Placeholder values are accepted with a warning: the bundled example
+    handlers use exactly those values, so signing with them is what makes the
+    local walkthrough work. They will never match a real provider.
+    """
+    status = config.secret_status(provider)
+    if status.state == "set":
+        return status.value
+    if status.state == "placeholder":
+        console.print(
+            f"[yellow]warning: {status.env_var} is set to a placeholder value; "
+            f"using it for {purpose}. That only matches handlers configured with "
+            f"the same placeholder (like the bundled examples), never a real provider.[/]"
+        )
+        return status.value
+    console.print(
+        f"[red]{purpose}: no secret for {provider!r}. {status.env_var} is not set - "
+        f"export it, add it to .env (see .env.example), or pass --secret.[/]"
+    )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
@@ -75,13 +99,16 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
     provider = args.provider or event.provider
     secret = args.secret
-    if secret is None and args.sign and provider:
-        secret = config.get_secret(provider)
-        if secret is None:
+    if secret is None and args.sign:
+        if not provider:
             console.print(
-                f"[yellow]--sign requested but no secret for {provider!r}. "
-                f"Set {PROVIDERS[provider].env_var} or pass --secret.[/]"
+                f"[red]--sign: event #{args.id} has no detected provider, so there is "
+                f"no signature scheme to apply. Pass --provider.[/]"
             )
+            return 2
+        secret = _resolve_secret(provider, purpose="--sign")
+        if secret is None:
+            return 2
     override_body = _read_payload(args.body) if args.body else None
     extra_headers = _parse_headers(args.header)
 
@@ -113,12 +140,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         console.print(f"[red]Unknown provider {args.provider!r}[/]")
         return 2
     spec = PROVIDERS[args.provider]
-    secret = args.secret if args.secret is not None else config.get_secret(args.provider)
+    secret = args.secret
     if secret is None:
-        console.print(
-            f"[red]No secret provided. Pass --secret or set {spec.env_var}.[/]"
-        )
-        return 2
+        secret = _resolve_secret(args.provider, purpose="verify")
+        if secret is None:
+            return 2
 
     body = _read_payload(args.payload)
     headers = {spec.signature_header: args.signature}
@@ -189,12 +215,24 @@ def build_parser() -> argparse.ArgumentParser:
         prog="webhook-toolkit",
         description="Receive, verify, inspect and replay webhooks locally.",
     )
+    env_help = (
+        "load environment variables from FILE (default: ./.env when present); "
+        "variables already set in the shell take precedence"
+    )
+    parser.add_argument("--env-file", metavar="FILE", help=env_help)
+    # Also accept --env-file after the sub-command without clobbering a value
+    # given before it.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--env-file", metavar="FILE", default=argparse.SUPPRESS, help=env_help)
     sub = parser.add_subparsers(dest="command", required=True)
+
+    def add_parser(name: str, **kwargs) -> argparse.ArgumentParser:
+        return sub.add_parser(name, parents=[common], **kwargs)
 
     def add_db(p: argparse.ArgumentParser) -> None:
         p.add_argument("--db", default=config.DEFAULT_DB, help="SQLite database path")
 
-    p_serve = sub.add_parser("serve", help="run the receiver and inspector")
+    p_serve = add_parser("serve", help="run the receiver and inspector")
     add_db(p_serve)
     p_serve.add_argument("--host", default=config.DEFAULT_HOST)
     p_serve.add_argument("--port", type=int, default=config.DEFAULT_PORT)
@@ -204,7 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.set_defaults(func=cmd_serve)
 
-    p_forward = sub.add_parser("forward", help="receive and fan-out to local URLs")
+    p_forward = add_parser("forward", help="receive and fan-out to local URLs")
     add_db(p_forward)
     p_forward.add_argument("--host", default=config.DEFAULT_HOST)
     p_forward.add_argument("--port", type=int, default=config.DEFAULT_PORT)
@@ -214,7 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_forward.set_defaults(func=cmd_forward)
 
-    p_replay = sub.add_parser("replay", help="replay a stored event to a URL")
+    p_replay = add_parser("replay", help="replay a stored event to a URL")
     add_db(p_replay)
     p_replay.add_argument("id", type=int, help="stored event id")
     p_replay.add_argument("--to", required=True, metavar="URL", help="target URL")
@@ -227,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_replay.add_argument("--timeout", type=float, default=10.0)
     p_replay.set_defaults(func=cmd_replay)
 
-    p_verify = sub.add_parser("verify", help="check a payload + signature pair")
+    p_verify = add_parser("verify", help="check a payload + signature pair")
     p_verify.add_argument("--provider", required=True, choices=sorted(PROVIDERS))
     p_verify.add_argument("--payload", required=True, metavar="FILE", help="payload file, or - for stdin")
     p_verify.add_argument("--signature", required=True, help="the provider signature header value")
@@ -238,17 +276,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--now", type=int, help="override the current epoch time (testing)")
     p_verify.set_defaults(func=cmd_verify)
 
-    p_list = sub.add_parser("list", help="show recent captured events")
+    p_list = add_parser("list", help="show recent captured events")
     add_db(p_list)
     p_list.add_argument("--limit", type=int, default=50)
     p_list.set_defaults(func=cmd_list)
 
-    p_export = sub.add_parser("export", help="export stored events to a fixture")
+    p_export = add_parser("export", help="export stored events to a fixture")
     add_db(p_export)
     p_export.add_argument("file", help="output JSON file")
     p_export.set_defaults(func=cmd_export)
 
-    p_import = sub.add_parser("import", help="import events from a fixture")
+    p_import = add_parser("import", help="import events from a fixture")
     add_db(p_import)
     p_import.add_argument("file", help="input JSON file")
     p_import.set_defaults(func=cmd_import)
@@ -256,7 +294,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_env(argv: list[str]) -> int:
+    """Load ``--env-file`` (or ./.env) *before* building the parser.
+
+    Defaults such as ``--db`` and ``--port`` come from the environment, so the
+    file has to be applied first. Returns a non-zero exit code on failure.
+    """
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--env-file")
+    known, _ = pre.parse_known_args(argv)
+    try:
+        config.load_env_file(known.env_file)
+    except (FileNotFoundError, UnicodeDecodeError) as exc:
+        console.print(f"[red]{exc}[/]")
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    status = _load_env(argv)
+    if status:
+        return status
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

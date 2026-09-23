@@ -4,9 +4,11 @@ Bodies are stored as raw bytes (BLOB) so a replay reproduces the exact payload
 the provider sent — this matters because signatures are computed over the byte
 stream, and re-encoding through ``str`` would silently break verification.
 
-One connection is opened per operation. That is more than fast enough for a
-local dev tool and sidesteps SQLite's cross-thread connection rules under the
-uvicorn worker threadpool.
+One connection is opened per operation and *closed* when it finishes (the
+``sqlite3`` context manager only commits; it does not close). That is more than
+fast enough for a local dev tool, sidesteps SQLite's cross-thread connection
+rules under the uvicorn worker threadpool, and never leaves the database file
+locked on Windows.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -134,13 +138,23 @@ class Storage:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextmanager
+    def _session(self) -> Iterator[sqlite3.Connection]:
+        """Open a connection, commit (or roll back) the block, always close."""
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _init_schema(self) -> None:
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.executescript(SCHEMA)
 
     # -- writes ------------------------------------------------------------
     def insert(self, event: StoredEvent) -> int:
-        with self._connect() as conn:
+        with self._session() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO events
@@ -164,12 +178,12 @@ class Storage:
             return event.id
 
     def delete(self, event_id: int) -> bool:
-        with self._connect() as conn:
+        with self._session() as conn:
             cursor = conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
             return cursor.rowcount > 0
 
     def clear(self) -> int:
-        with self._connect() as conn:
+        with self._session() as conn:
             cursor = conn.execute("DELETE FROM events")
             return cursor.rowcount
 
@@ -190,14 +204,14 @@ class Storage:
         )
 
     def get(self, event_id: int) -> StoredEvent | None:
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute(
                 "SELECT * FROM events WHERE id = ?", (event_id,)
             ).fetchone()
         return self._row_to_event(row) if row else None
 
     def list(self, limit: int = 100, offset: int = 0) -> list[StoredEvent]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 "SELECT * FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
                 (limit, offset),
@@ -205,11 +219,11 @@ class Storage:
         return [self._row_to_event(row) for row in rows]
 
     def all(self) -> list[StoredEvent]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def count(self) -> int:
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()
         return int(row["n"])

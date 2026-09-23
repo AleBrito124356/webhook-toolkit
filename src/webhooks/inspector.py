@@ -108,8 +108,11 @@ INSPECTOR_HTML = """<!doctype html>
     }).join("");
   }
 
-  function render(events) {
-    countEl.textContent = events.length + (events.length === 1 ? " event" : " events");
+  function render(events, total) {
+    if (typeof total !== "number") total = events.length;
+    countEl.textContent = events.length < total
+      ? "showing " + events.length + " of " + total + " events"
+      : total + (total === 1 ? " event" : " events");
     if (!events.length) {
       listEl.innerHTML = '<div class="empty">No events captured yet.</div>';
       return;
@@ -143,7 +146,7 @@ INSPECTOR_HTML = """<!doctype html>
   function refresh() {
     fetch("/api/events?limit=100")
       .then(function (r) { return r.json(); })
-      .then(function (data) { render(data.events || []); })
+      .then(function (data) { render(data.events || [], data.count); })
       .catch(function () {});
   }
 

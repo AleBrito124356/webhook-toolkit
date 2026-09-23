@@ -45,8 +45,11 @@ flowchart LR
     F -->|localhost| H3[Handler B]
 ```
 
-The receiver is a catch-all: **any** method on **any** path is captured, so you
-never have to configure routes to start seeing traffic. Bodies are stored as raw
+The receiver is a catch-all: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` and
+`OPTIONS` on any path are captured, so you never have to configure routes to
+start seeing traffic. The only paths it keeps for itself are the inspector's
+(`GET /`, `GET /favicon.ico` and the `/api/events` JSON feed); FastAPI's
+`/docs`, `/redoc` and `/openapi.json` are switched off so they are captured too. Bodies are stored as raw
 bytes because signatures are computed over the exact byte stream — re-encoding
 through a string would break verification on replay.
 
@@ -83,10 +86,21 @@ pip install -r requirements.txt
 cp .env.example .env        # then fill in the signing secrets you have
 ```
 
+Every command reads `./.env` on startup (or the file given with
+`--env-file FILE`); variables already exported in your shell win over the file.
+The example handlers read the same `.env`, so both sides share one secret.
+
 Every secret in `.env.example` is an obvious placeholder — a literal `X` run or
-a plainly-fake string — that no provider will accept. Until you replace one, the
-toolkit reports `no secret` rather than a misleading `invalid` — verification is
-simply skipped for that provider.
+a plainly-fake string — that no provider will accept. The toolkit treats them
+explicitly:
+
+- the **receiver** never labels a capture `invalid` because of a placeholder (a
+  real provider cannot sign with one); it shows `no secret` instead, and only
+  shows `verified` when the capture really was signed with that placeholder;
+- **explicit commands** (`verify`, `replay --sign`) still use a placeholder, with
+  a visible warning, so the local walkthrough against the bundled example
+  handlers (which fall back to the same placeholders) works before you have
+  real secrets.
 
 ## The no-tunnel workflow
 

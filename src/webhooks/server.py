@@ -1,14 +1,17 @@
 """FastAPI receiver, live console and web inspector.
 
-The app exposes three things:
+The app exposes:
 
-* ``GET /``           -> the inline HTML inspector
-* ``GET /api/events`` -> recent captures as JSON (consumed by the inspector)
-* ``ANY /{path}``     -> the catch-all receiver that stores every inbound request
+* ``GET /``            -> the inline HTML inspector
+* ``GET /favicon.ico`` -> an inline SVG icon (so browsers do not pollute the
+  capture list with their automatic favicon request)
+* ``GET /api/events``  -> recent captures as JSON (consumed by the inspector)
+* ``ANY /{path}``      -> the catch-all receiver that stores every inbound request
 
-Because the catch-all is registered last, the two explicit ``GET`` routes win
-for their paths while a ``POST /`` (or any other method/path) falls through to
-the receiver.
+Because the catch-all is registered last, the explicit ``GET`` routes win for
+their exact paths while a ``POST /`` (or any other method/path) falls through to
+the receiver. FastAPI's ``/docs``, ``/redoc`` and ``/openapi.json`` are turned
+off so those paths are captured like any other.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from rich.console import Console
 from rich.table import Table
 
-from . import config
+from . import __version__, config
 from .forward import TargetStats, forward_event
 from .inspector import INSPECTOR_HTML
 from .storage import Storage, StoredEvent
@@ -29,8 +32,16 @@ from .verify import detect_provider, verify_request
 console = Console()
 
 # Methods the receiver accepts. Webhooks are almost always POST, but capturing
-# the rest makes the tool useful for debugging arbitrary callbacks too.
-_RECEIVER_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+# the rest makes the tool useful for debugging arbitrary callbacks too (HEAD
+# health checks, CORS preflights, validation GETs).
+_RECEIVER_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
+FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect width="32" height="32" rx="7" fill="#2563eb"/>'
+    '<path d="M9 17.5l4.5 4.5L23 11" fill="none" stroke="#fff" stroke-width="3.2" '
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
 
 
 @dataclass
@@ -46,20 +57,29 @@ class ServerState:
 
 
 def _verify_inbound(event: StoredEvent) -> int | None:
-    """Return 1/0/None for a captured event using any configured secret."""
+    """Return 1/0/None for a captured event using any configured secret.
+
+    * no provider detected, or no secret configured -> ``None``
+    * a real secret -> ``1`` / ``0``
+    * a placeholder secret -> ``1`` when the capture was signed with that very
+      placeholder (a local demo or the bundled fixture), otherwise ``None``: a
+      real provider never signs with a placeholder, so "invalid" would mislead.
+    """
     if not event.provider:
         return None
-    secret = config.get_secret(event.provider)
-    if secret is None:
+    status = config.secret_status(event.provider)
+    if not status.usable:
         return None
     result = verify_request(
         event.provider,
-        secret.encode("utf-8"),
+        status.value.encode("utf-8"),
         event.body,
         event.headers,
         tolerance=config.DEFAULT_TOLERANCE,
     )
-    return 1 if result.ok else 0
+    if result.ok:
+        return 1
+    return 0 if status.state == "set" else None
 
 
 def _log_event(event: StoredEvent) -> None:
@@ -98,7 +118,15 @@ def create_app(
     verify_inbound: bool = True,
 ) -> FastAPI:
     """Build a configured FastAPI application."""
-    app = FastAPI(title="webhook-toolkit", version="0.1.0")
+    # No auto-generated docs: /docs, /redoc and /openapi.json must be captured
+    # by the receiver like every other path.
+    app = FastAPI(
+        title="webhook-toolkit",
+        version=__version__,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     state = ServerState(
         storage=Storage(db_path),
         forward_targets=list(forward_targets or []),
@@ -109,6 +137,14 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
         return HTMLResponse(INSPECTOR_HTML)
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        return Response(
+            FAVICON_SVG,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     @app.get("/api/events")
     async def api_events(limit: int = 100, offset: int = 0) -> JSONResponse:
@@ -166,12 +202,15 @@ def _forward_and_log(state: ServerState, event: StoredEvent) -> None:
 def serve(
     db_path: str,
     *,
-    host: str = config.DEFAULT_HOST,
-    port: int = config.DEFAULT_PORT,
+    host: str | None = None,
+    port: int | None = None,
     forward_targets: list[str] | None = None,
 ) -> None:
     """Run the receiver with uvicorn (blocking)."""
     import uvicorn
+
+    host = host or config.DEFAULT_HOST
+    port = config.DEFAULT_PORT if port is None else port
 
     app = create_app(db_path, forward_targets=forward_targets)
     targets = forward_targets or []

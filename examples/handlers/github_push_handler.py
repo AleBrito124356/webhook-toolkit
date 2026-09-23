@@ -1,12 +1,20 @@
 """A verified GitHub *push* webhook handler.
 
-Run it, then deliver (or replay) a push event to it:
+Run it, then deliver (or replay) a push event to it. The handler and the
+toolkit must share the same secret; the simplest way is a ``.env`` file in the
+repository root, which both of them read (shell variables win over the file):
 
-    export GITHUB_WEBHOOK_SECRET="use-a-long-random-string-here"
+    cp .env.example .env            # then set GITHUB_WEBHOOK_SECRET to anything
     uvicorn examples.handlers.github_push_handler:app --port 3001
 
-    # From another shell, replay a captured push and re-sign it:
+    # From another shell, load the bundled push and replay it, re-signed with
+    # the secret from .env so the handler accepts it:
+    python cli.py import examples/fixtures/github_push.json
     python cli.py replay 1 --to http://127.0.0.1:3001/webhooks/github --sign
+
+If you leave the ``.env.example`` placeholder in place, ``--sign`` still signs
+with it (and prints a warning), so the walkthrough works end to end; a real
+GitHub delivery will of course only verify with your real secret.
 
 GitHub signs the raw request body with HMAC-SHA256 and sends it in the
 ``X-Hub-Signature-256`` header as ``sha256=<hex>``. We must read the *raw* body
@@ -26,7 +34,11 @@ from fastapi import FastAPI, Header, HTTPException, Request
 # Make ``src`` importable when run from the repository root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.webhooks.config import load_env_file  # noqa: E402
 from src.webhooks.verify import verify_github  # noqa: E402
+
+# Share the toolkit's .env (no-op when there is none; real env vars win).
+load_env_file()
 
 app = FastAPI(title="github-push-handler")
 

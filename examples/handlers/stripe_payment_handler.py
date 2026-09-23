@@ -1,13 +1,19 @@
 """A verified Stripe *payment* webhook handler.
 
-Run it, then deliver (or replay) an event to it:
+Run it, then deliver (or replay) an event to it. The handler and the toolkit
+must share the same secret; the simplest way is a ``.env`` file in the
+repository root, which both of them read (shell variables win over the file):
 
-    export STRIPE_WEBHOOK_SECRET="whsec_XXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    cp .env.example .env            # set STRIPE_WEBHOOK_SECRET (whsec_...)
     uvicorn examples.handlers.stripe_payment_handler:app --port 3002
 
-    # Replay a captured event, re-signing with a fresh timestamp so it passes
-    # Stripe's 5-minute tolerance window:
+    # Replay a stored Stripe event, re-signing it with a fresh timestamp so it
+    # passes the 5-minute tolerance window:
     python cli.py replay 2 --to http://127.0.0.1:3002/webhooks/stripe --sign
+
+With the ``.env.example`` placeholder still in place, ``--sign`` signs with that
+placeholder (and prints a warning), which this handler also falls back to, so
+the local loop works before you have a real Stripe secret.
 
 Stripe sends the signature in the ``Stripe-Signature`` header as
 ``t=<timestamp>,v1=<hex>`` where the HMAC-SHA256 is computed over
@@ -28,7 +34,11 @@ from fastapi import FastAPI, Header, HTTPException, Request
 # Make ``src`` importable when run from the repository root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.webhooks.config import load_env_file  # noqa: E402
 from src.webhooks.verify import verify_stripe  # noqa: E402
+
+# Share the toolkit's .env (no-op when there is none; real env vars win).
+load_env_file()
 
 app = FastAPI(title="stripe-payment-handler")
 

@@ -87,3 +87,89 @@ def test_replay_extra_headers_override():
     keys = [k.lower() for k in request.headers]
     assert keys.count("content-type") == 1
     assert request.header("content-type") == "text/plain"
+
+
+# --- hop-by-hop headers -------------------------------------------------------
+def test_replay_strips_every_hop_by_hop_header():
+    event = _event(
+        "github",
+        {
+            "Transfer-Encoding": "chunked",
+            "TE": "trailers",
+            "Trailer": "X-Checksum",
+            "Keep-Alive": "timeout=5",
+            "Proxy-Connection": "keep-alive",
+            "Upgrade": "h2c",
+            "Expect": "100-continue",
+            "Connection": "keep-alive, X-Private-Hop",
+            "X-Private-Hop": "only for the first hop",
+            "X-Keep": "yes",
+        },
+    )
+    request = build_replay_request(event, "http://localhost:9/hook")
+    assert {k.lower() for k in request.headers} == {"x-keep"}
+
+
+def test_replay_ignores_manual_framing_overrides():
+    event = _event("github", {})
+    request = build_replay_request(
+        event,
+        "http://localhost:9/hook",
+        extra_headers={"Content-Length": "999", "Transfer-Encoding": "chunked", "X-Debug": "1"},
+    )
+    assert request.header("content-length") is None
+    assert request.header("transfer-encoding") is None
+    assert request.header("x-debug") == "1"
+
+
+def _capture_one_request(responses=b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"):
+    """Start a raw TCP server that records exactly the bytes of one request."""
+    import socket
+    import threading
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    captured = {}
+
+    def run():
+        conn, _ = server.accept()
+        with conn:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(65536)
+            head, _, rest = data.partition(b"\r\n\r\n")
+            length = 0
+            for line in head.split(b"\r\n")[1:]:
+                name, _, value = line.partition(b":")
+                if name.strip().lower() == b"content-length":
+                    length = int(value.strip())
+            while len(rest) < length:
+                rest += conn.recv(65536)
+            captured["head"] = head.decode("latin-1")
+            captured["body"] = rest
+            conn.sendall(responses)
+        server.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return server.getsockname()[1], captured, thread
+
+
+def test_chunked_capture_replays_as_valid_http_on_the_wire():
+    # Regression: a capture received with chunked framing used to be replayed
+    # with BOTH Transfer-Encoding and Content-Length, which strict servers
+    # (Node's llhttp) reject as a request-smuggling vector.
+    from src.webhooks.replay import send_replay
+
+    port, captured, thread = _capture_one_request()
+    event = _event("github", {"transfer-encoding": "chunked", "content-type": "application/json"})
+    request = build_replay_request(event, f"http://127.0.0.1:{port}/hook", secret=FAKE_SECRET)
+    result = send_replay(request, timeout=5)
+    thread.join(5)
+
+    assert result.ok and result.status_code == 200
+    header_lines = [line.lower() for line in captured["head"].split("\r\n")[1:]]
+    assert not any(line.startswith("transfer-encoding") for line in header_lines)
+    assert f"content-length: {len(BODY)}" in header_lines
+    assert captured["body"] == BODY

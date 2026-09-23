@@ -21,8 +21,32 @@ import httpx
 from .storage import StoredEvent
 from .verify import PROVIDERS, SIGNERS, SLACK_TIMESTAMP_HEADER
 
-# Hop-by-hop / recomputed headers we never forward verbatim.
-_STRIP_HEADERS = {"host", "content-length", "connection", "accept-encoding"}
+# Headers that describe the *original* connection or message framing, never the
+# payload. Copying them onto a new request produces invalid HTTP: a captured
+# ``Transfer-Encoding: chunked`` next to the ``Content-Length`` httpx computes
+# is rejected outright by strict parsers such as Node's llhttp. ``host`` and
+# ``content-length`` are recomputed for the new target; ``accept-encoding`` is
+# left to the HTTP client so it can decode the response it asked for.
+HOP_BY_HOP_HEADERS = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "expect",
+        "host",
+        "content-length",
+        "accept-encoding",
+    }
+)
+# Backwards-compatible alias.
+_STRIP_HEADERS = HOP_BY_HOP_HEADERS
+_FRAMING_HEADERS = frozenset({"content-length", "transfer-encoding"})
 
 
 @dataclass
@@ -51,9 +75,23 @@ class ReplayResult:
     resigned: bool = False
 
 
+def _connection_tokens(headers: dict[str, str]) -> set[str]:
+    """Header names listed in ``Connection`` are hop-by-hop too (RFC 9110 7.6.1)."""
+    tokens: set[str] = set()
+    for key, value in headers.items():
+        if key.lower() == "connection":
+            tokens.update(t.strip().lower() for t in value.split(",") if t.strip())
+    return tokens
+
+
 def _clean_headers(headers: dict[str, str], overrides: dict[str, str] | None) -> dict[str, str]:
-    cleaned = {k: v for k, v in headers.items() if k.lower() not in _STRIP_HEADERS}
+    drop = HOP_BY_HOP_HEADERS | _connection_tokens(headers)
+    cleaned = {k: v for k, v in headers.items() if k.lower() not in drop}
     for key, value in (overrides or {}).items():
+        if key.lower() in _FRAMING_HEADERS:
+            # The HTTP client frames the body itself; a manual value would
+            # contradict it and produce an invalid request.
+            continue
         # Replace case-insensitively so we do not end up with duplicate keys.
         for existing in list(cleaned):
             if existing.lower() == key.lower():
