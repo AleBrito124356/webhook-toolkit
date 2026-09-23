@@ -253,3 +253,31 @@ def replay_event(
     result = send_replay(request, timeout=timeout)
     result.resigned = request.resigned
     return result
+
+
+def _shell_quote(text: str) -> str:
+    """POSIX single-quote ``text`` (every byte preserved, newlines included)."""
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+
+def to_curl(request: ReplayRequest) -> str:
+    """Render ``request`` as a copy-pasteable ``curl`` command (bash/zsh).
+
+    Text bodies are passed inline with ``--data-binary`` inside single quotes,
+    which keeps every byte (including a trailing newline) so a signature stays
+    valid. Bodies that are not UTF-8 text are referenced as ``@body.bin``: save
+    the raw body there first (the inspector's "Download raw").
+    """
+    lines = [f"curl -sS -X {request.method} {_shell_quote(request.url)}"]
+    for name, value in request.headers.items():
+        lines.append(f"  -H {_shell_quote(f'{name}: {value}')}")
+    if request.body:
+        try:
+            text = request.body.decode("utf-8")
+        except UnicodeDecodeError:
+            text = None
+        if text is None or "\x00" in text:
+            lines.append("  --data-binary @body.bin  # binary body: save the raw bytes as body.bin")
+        else:
+            lines.append(f"  --data-binary {_shell_quote(text)}")
+    return " \\\n".join(lines)

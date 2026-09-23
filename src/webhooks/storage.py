@@ -228,11 +228,57 @@ class Storage:
             ).fetchone()
         return self._row_to_event(row) if row else None
 
-    def list(self, limit: int = 100, offset: int = 0) -> list[StoredEvent]:
+    @staticmethod
+    def _where(
+        provider: str | None = None,
+        verified: str | int | None = None,
+        path_contains: str | None = None,
+    ) -> tuple[str, list]:
+        """SQL filter for list/count.
+
+        ``provider``: a provider name, or ``"unsigned"`` for requests without
+        one. ``verified``: ``1`` / ``0`` / ``"none"`` (not checked).
+        ``path_contains``: case-insensitive substring of the path.
+        """
+        clauses: list[str] = []
+        params: list = []
+        if provider:
+            if provider == "unsigned":
+                clauses.append("provider IS NULL")
+            else:
+                clauses.append("provider = ?")
+                params.append(provider)
+        if verified is not None and verified != "":
+            value = str(verified).lower()
+            if value in ("none", "null", "unchecked"):
+                clauses.append("verified IS NULL")
+            elif value in ("1", "0"):
+                clauses.append("verified = ?")
+                params.append(int(value))
+            else:
+                raise ValueError(f"verified filter must be 1, 0 or none, not {verified!r}")
+        if path_contains:
+            escaped = (
+                path_contains.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            )
+            clauses.append("path LIKE ? ESCAPE '!'")
+            params.append(f"%{escaped}%")
+        return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+    def list(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        provider: str | None = None,
+        verified: str | int | None = None,
+        path_contains: str | None = None,
+    ) -> list[StoredEvent]:
+        where, params = self._where(provider, verified, path_contains)
         with self._session() as conn:
             rows = conn.execute(
-                "SELECT * FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                f"SELECT * FROM events{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             ).fetchall()
         return [self._row_to_event(row) for row in rows]
 
@@ -241,7 +287,14 @@ class Storage:
             rows = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
         return [self._row_to_event(row) for row in rows]
 
-    def count(self) -> int:
+    def count(
+        self,
+        *,
+        provider: str | None = None,
+        verified: str | int | None = None,
+        path_contains: str | None = None,
+    ) -> int:
+        where, params = self._where(provider, verified, path_contains)
         with self._session() as conn:
-            row = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM events{where}", params).fetchone()
         return int(row["n"])

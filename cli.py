@@ -122,14 +122,21 @@ def _print_diagnosis(diagnosis: Diagnosis, *, indent: str = "  ") -> None:
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
-def cmd_serve(args: argparse.Namespace) -> int:
-    serve(args.db, host=args.host, port=args.port, forward_targets=args.forward)
+def _serve(args: argparse.Namespace, targets: list[str]) -> int:
+    try:
+        serve(args.db, host=args.host, port=args.port, forward_targets=targets)
+    except ValueError as exc:  # bad forward target or GENERIC_WEBHOOK_* setting
+        err.print(f"[red]{escape(str(exc))}[/]")
+        return 2
     return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    return _serve(args, args.forward)
 
 
 def cmd_forward(args: argparse.Namespace) -> int:
-    serve(args.db, host=args.host, port=args.port, forward_targets=args.to)
-    return 0
+    return _serve(args, args.to)
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
@@ -472,8 +479,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default=config.DEFAULT_HOST)
     p_serve.add_argument("--port", type=int, default=config.DEFAULT_PORT)
     p_serve.add_argument(
-        "--forward", action="append", default=[], metavar="URL",
-        help="also fan-out each capture to URL (repeatable)",
+        "--forward", action="append", default=[], metavar="[PROVIDER=]URL",
+        help="also fan-out each capture to URL (repeatable); PROVIDER= limits a target "
+             "to one provider's events (github, stripe, slack, shopify, generic, unsigned)",
     )
     p_serve.set_defaults(func=cmd_serve)
 
@@ -482,8 +490,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_forward.add_argument("--host", default=config.DEFAULT_HOST)
     p_forward.add_argument("--port", type=int, default=config.DEFAULT_PORT)
     p_forward.add_argument(
-        "--to", action="append", required=True, metavar="URL",
-        help="forward target URL (repeatable, at least one)",
+        "--to", action="append", required=True, metavar="[PROVIDER=]URL",
+        help="forward target URL (repeatable, at least one); PROVIDER= limits a target to "
+             "one provider's events, e.g. github=http://127.0.0.1:3001/webhooks/github",
     )
     p_forward.set_defaults(func=cmd_forward)
 

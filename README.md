@@ -47,9 +47,10 @@ flowchart LR
 
 The receiver is a catch-all: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` and
 `OPTIONS` on any path are captured, so you never have to configure routes to
-start seeing traffic. The only paths it keeps for itself are the inspector's
-(`GET /`, `GET /favicon.ico` and the `/api/events` JSON feed); FastAPI's
-`/docs`, `/redoc` and `/openapi.json` are switched off so they are captured too. Bodies are stored as raw
+start seeing traffic. The only routes it keeps for itself are the inspector's
+(`GET /`, `GET /favicon.ico` and the [JSON API](#http-api) under `/api/`, each
+only for its own method); FastAPI's `/docs`, `/redoc` and `/openapi.json` are
+switched off so they are captured too. Bodies are stored as raw
 bytes because signatures are computed over the exact byte stream — re-encoding
 through a string would break verification on replay.
 
@@ -206,25 +207,76 @@ round-trip, no tunnel, fully reproducible.
 
 ## Usage
 
+### The inspector: a replay workbench in the browser
+
+`serve` (and `forward`) host the inspector at `http://127.0.0.1:8000/`. It is a
+single self-contained page (no CDN, no build step) that:
+
+- lists captures newest first with the **true total**, pages through all of
+  them, and filters by provider (including `unsigned`), signature result
+  (verified / invalid / not checked) and path;
+- expands a capture into its **signature diagnosis** (reason, code, timestamp
+  skew and the hints from the diagnosis engine), pretty-printed body and headers;
+- **replays** it to any URL, re-signed with the provider secret and a fresh
+  timestamp, optionally with an **edited body** and extra headers, and shows
+  the handler's answer — the edit survives the live refresh while you type;
+- **copies the replay as a `curl` command** (signed, byte-exact body),
+  **downloads the raw bytes**, **deletes** a capture or **clears** them all;
+- shows the **forward-target counters** when `forward` is running.
+
+![The inspector filtered to invalid captures: a stale Stripe delivery with its diagnosis and the replay form open](docs/inspector.png)
+
+Captured bodies are untrusted input, so the page never renders them as HTML,
+raw downloads are served as `application/octet-stream` with `nosniff`, and the
+mutating API routes refuse cross-site browser requests (`Origin` /
+`Sec-Fetch-Site` checks; replay only accepts `application/json`, which a
+cross-site form cannot send without a CORS preflight).
+
 ### Serve and forward
 
 ```bash
 # Receive only
 python cli.py serve --port 8000
 
-# Receive AND fan-out every capture to two local handlers (mini smee)
+# Receive AND fan-out every capture to local handlers (a mini smee).
+# PROVIDER=URL only forwards that provider's events, so each handler gets
+# only what it can verify; a bare URL gets everything.
 python cli.py forward --port 8000 \
-    --to http://127.0.0.1:3001/webhooks/github \
-    --to http://127.0.0.1:3002/webhooks/stripe
+    --to github=http://127.0.0.1:3001/webhooks/github \
+    --to stripe=http://127.0.0.1:3002/webhooks/stripe \
+    --to http://127.0.0.1:3003/everything
 ```
 
-Each forward reports a per-target status with retries on 5xx / connection errors:
+Targets are delivered **concurrently**, so a dead or slow handler never delays
+the others. Connection errors and 5xx responses are retried (2 retries, linear
+backoff); a 4xx is a definitive answer and is not retried. Each result is
+printed as soon as that target finishes, with running totals, and the same
+counters are served at `GET /api/forward` and shown in the inspector:
 
 ```
-forward #7 -> target                          status        attempts
-http://127.0.0.1:3001/webhooks/github         200 ok               1
-http://127.0.0.1:3002/webhooks/stripe         Connection refused   3
+#1 POST /webhooks/github | github | verified | 2057 B | 2026-09-23T16:53:25.046283Z
+   forward #1 -> github=http://127.0.0.1:3001/webhooks/github 200 ok (1 attempt, 6 ms) | totals: 1 delivered, 0 failed
+   forward #1 -> http://127.0.0.1:3003/everything HTTP 503 (2 attempts, 60 ms) | totals: 0 delivered, 1 failed
 ```
+
+### HTTP API
+
+Everything the inspector does is plain JSON over HTTP, so it can be scripted:
+
+| Route | What it does |
+|---|---|
+| `GET /api/events?limit=&offset=&provider=&verified=&q=&summary=` | captures, newest first; `count` (matching) and `total` (stored); `verified` is `1`, `0` or `none`; `provider=unsigned` for requests without a known signature |
+| `GET /api/events/{id}` | one capture with a live `assessment` (verified, reason and full diagnosis with hints) |
+| `GET /api/events/{id}/raw` | the exact body bytes as a download |
+| `POST /api/events/{id}/replay` | JSON `{"to", "sign", "secret", "provider", "body" or "body_base64", "headers", "timeout"}`; returns status, timing, response snippet, the headers sent and warnings |
+| `POST /api/events/{id}/curl` | the same replay rendered as a `curl` command |
+| `DELETE /api/events/{id}`, `DELETE /api/events` | delete one capture / all of them |
+| `GET /api/forward` | per-target counters: delivered, failed, last status/error/event, average time |
+| `GET /api/status` | version, database, tolerance, each provider's secret *state* (never the value), forward targets |
+
+These routes (plus `GET /` and `GET /favicon.ico`) are the only ones the
+receiver keeps for itself, and only for those exact methods: `POST /api/events`
+or `GET /api/events/abc` are captured like any other request.
 
 ### Replay and modify-then-replay
 

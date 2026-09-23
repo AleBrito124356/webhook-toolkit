@@ -12,7 +12,10 @@ generates fresh random signing secrets for this run, and then exercises every
 feature against them: all bundled samples are signed and delivered, the
 receiver's diagnosis is checked on tampered/stale/wrongly-signed deliveries,
 stored events are replayed (with and without re-signing, and with an edited
-body) to the real handlers, and samples are sent straight to the handlers.
+body) to the real handlers, samples are sent straight to the handlers, the
+inspector's JSON API is driven like the browser does (filters, diagnosis,
+replay, curl, the cross-site guard), and a second receiver fans every capture
+out to both handlers plus a failing target.
 
 Every step prints the equivalent CLI command. The script ends with a pass/fail
 summary and exits 0 only when every check passed.
@@ -33,6 +36,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+import httpx  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.markup import escape  # noqa: E402
 
@@ -252,16 +258,101 @@ def run(report: Report) -> None:
             "amount=125000 currency=eur",
         )
 
-        # 5. What the inspector sees -----------------------------------------------
-        report.section("5. The inspector API has every capture", f"open {receiver.url}/")
-        import httpx
-
+        # 5. The inspector's JSON API ---------------------------------------------
+        report.section("5. The inspector API: filters, diagnosis, replay, curl", f"open {receiver.url}/")
         listing = httpx.get(f"{receiver.url}/api/events", params={"limit": 1}).json()
         report.check(
             "GET /api/events reports the true total",
             listing.get("count") == storage.count(),
             f"{listing.get('count')} events stored",
         )
+        invalid = httpx.get(f"{receiver.url}/api/events", params={"verified": "0"}).json()
+        report.check(
+            "filter verified=0 returns exactly the three broken deliveries",
+            invalid.get("count") == 3,
+            ", ".join(f"#{e['id']} {e['path']}" for e in invalid.get("events", [])),
+        )
+        detail = httpx.get(f"{receiver.url}/api/events/{stale_id}").json()
+        diagnosis = (detail.get("assessment") or {}).get("diagnosis") or {}
+        report.check(
+            "event detail carries the diagnosis and its hints",
+            diagnosis.get("code") == "timestamp_out_of_tolerance" and bool(diagnosis.get("hints")),
+            diagnosis.get("hints", [""])[0][:90],
+        )
+        edited_payment = json.loads(stale.body)
+        edited_payment["data"]["object"]["amount"] = 4200
+        replayed = httpx.post(
+            f"{receiver.url}/api/events/{stale_id}/replay",
+            json={"to": f"{st.url}/webhooks/stripe", "sign": True, "body": json.dumps(edited_payment)},
+            timeout=15,
+        ).json()
+        report.check(
+            "POST /api/events/{id}/replay: edited, re-signed, accepted (what the Replay button does)",
+            replayed.get("status_code") == 200 and replayed.get("resigned") is True,
+            f"status {replayed.get('status_code')} {replayed.get('response_snippet', '')}",
+        )
+        curl = httpx.post(
+            f"{receiver.url}/api/events/{stale_id}/curl",
+            json={"to": f"{st.url}/webhooks/stripe", "sign": True},
+        ).json()
+        report.check(
+            "POST /api/events/{id}/curl renders the replay as a curl command",
+            curl.get("curl", "").startswith("curl -sS -X POST") and "Stripe-Signature: t=" in curl.get("curl", ""),
+        )
+        refused = httpx.delete(f"{receiver.url}/api/events", headers={"Origin": "http://evil.example"})
+        report.check(
+            "a cross-site page cannot clear the captures",
+            refused.status_code == 403 and storage.count() == listing.get("count"),
+            f"status {refused.status_code}",
+        )
+
+        # 6. Fan-out forwarding --------------------------------------------------------
+        flaky = FastAPI()
+
+        @flaky.post("/flaky")
+        async def always_unavailable():
+            return JSONResponse({"detail": "maintenance"}, status_code=503)
+
+        fan_db = str(Path(workdir.name) / "forward.db")
+        with BackgroundServer(flaky) as down:
+            targets = [
+                f"github={gh.url}/webhooks/github",
+                f"stripe={st.url}/webhooks/stripe",
+                f"{down.url}/flaky",
+            ]
+            report.section(
+                "6. Fan-out: one receiver feeding both handlers (and a failing one)",
+                "python cli.py forward --to github=" + targets[0].split("=", 1)[1]
+                + " --to stripe=" + targets[1].split("=", 1)[1] + " --to " + targets[2],
+            )
+            fan_app = create_app(fan_db, forward_targets=targets, forward_retries=1, forward_backoff=0.05)
+            with BackgroundServer(fan_app) as fan:
+                for provider, event in (("github", "push"), ("stripe", "payment_intent.succeeded")):
+                    rendered = samples.render_sample(samples.get_sample(provider, event))
+                    send_replay(samples.build_sample_request(rendered, fan.url, secret=demo[provider]))
+                deadline = time.monotonic() + 10
+                while True:
+                    stats = {t["target"]: t for t in httpx.get(f"{fan.url}/api/forward").json()["targets"]}
+                    done = sum(t["delivered"] + t["failed"] for t in stats.values())
+                    if done >= 4 or time.monotonic() > deadline:
+                        break
+                    time.sleep(0.05)
+            gh_stats, st_stats, down_stats = (stats[t] for t in targets)
+            report.check(
+                "github= target got only the GitHub event",
+                gh_stats["delivered"] == 1 and gh_stats["failed"] == 0,
+                f"delivered {gh_stats['delivered']}, last status {gh_stats['last_status']}",
+            )
+            report.check(
+                "stripe= target got only the Stripe event",
+                st_stats["delivered"] == 1 and st_stats["failed"] == 0,
+                f"delivered {st_stats['delivered']}, last status {st_stats['last_status']}",
+            )
+            report.check(
+                "a 503 target is retried, counted as failed, and does not block the others",
+                down_stats["failed"] == 2 and down_stats["last_error"] == "HTTP 503",
+                f"failed {down_stats['failed']}, last error {down_stats['last_error']}",
+            )
     workdir.cleanup()
 
 
