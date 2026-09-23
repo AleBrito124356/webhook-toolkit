@@ -30,12 +30,24 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .verify import GenericScheme
+
 # --- Provider -> environment variable holding its signing secret ------------
 SECRET_ENV = {
     "github": "GITHUB_WEBHOOK_SECRET",
     "stripe": "STRIPE_WEBHOOK_SECRET",
     "slack": "SLACK_SIGNING_SECRET",
     "shopify": "SHOPIFY_WEBHOOK_SECRET",
+    "generic": "GENERIC_WEBHOOK_SECRET",
+}
+
+# The generic HMAC provider is described by these variables. It only takes
+# part in header-based detection once GENERIC_WEBHOOK_HEADER is set.
+GENERIC_ENV = {
+    "signature_header": "GENERIC_WEBHOOK_HEADER",
+    "algorithm": "GENERIC_WEBHOOK_ALGORITHM",
+    "encoding": "GENERIC_WEBHOOK_ENCODING",
+    "prefix": "GENERIC_WEBHOOK_PREFIX",
 }
 
 # Obvious dummy values that should never be used as a real secret. Includes the
@@ -224,3 +236,26 @@ def all_secrets(*, allow_placeholder: bool = False) -> dict[str, str | None]:
         provider: get_secret(provider, allow_placeholder=allow_placeholder)
         for provider in SECRET_ENV
     }
+
+
+def generic_scheme(*, required: bool = False) -> GenericScheme | None:
+    """Return the generic HMAC scheme configured through ``GENERIC_WEBHOOK_*``.
+
+    Returns ``None`` when ``GENERIC_WEBHOOK_HEADER`` is unset, unless
+    ``required`` is true, in which case the defaults (``X-Signature``, SHA-256,
+    hex, no prefix) are used. Raises ``ValueError`` for an unsupported
+    algorithm or encoding, naming the variable.
+    """
+    header = os.environ.get(GENERIC_ENV["signature_header"], "").strip()
+    if not header and not required:
+        return None
+    values = {
+        "signature_header": header or GenericScheme.signature_header,
+        "algorithm": os.environ.get(GENERIC_ENV["algorithm"], "").strip().lower() or "sha256",
+        "encoding": os.environ.get(GENERIC_ENV["encoding"], "").strip().lower() or "hex",
+        "prefix": os.environ.get(GENERIC_ENV["prefix"], ""),
+    }
+    try:
+        return GenericScheme(**values)
+    except ValueError as exc:
+        raise ValueError(f"invalid GENERIC_WEBHOOK_* configuration: {exc}") from exc

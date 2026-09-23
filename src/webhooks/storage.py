@@ -32,10 +32,17 @@ CREATE TABLE IF NOT EXISTS events (
     body        BLOB    NOT NULL,
     source_ip   TEXT,
     provider    TEXT,
-    verified    INTEGER
+    verified    INTEGER,
+    verify_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at);
 """
+
+# Columns added after the first release, applied with ALTER TABLE to databases
+# created by older versions. Each entry is (column, SQL type).
+MIGRATIONS = [
+    ("verify_reason", "TEXT"),
+]
 
 
 def utcnow_iso() -> str:
@@ -47,8 +54,9 @@ def utcnow_iso() -> str:
 class StoredEvent:
     """A single captured request.
 
-    ``verified`` is ``None`` when no secret was configured, ``1`` when the
-    signature checked out, and ``0`` when it failed.
+    ``verified`` is ``None`` when the signature was not checked (unsigned
+    request, or no real secret configured), ``1`` when it checked out, and
+    ``0`` when it failed. ``verify_reason`` says why, in one line.
     """
 
     method: str
@@ -61,6 +69,7 @@ class StoredEvent:
     provider: str | None = None
     verified: int | None = None
     id: int | None = None
+    verify_reason: str | None = None
 
     # -- header access -----------------------------------------------------
     def header(self, name: str) -> str | None:
@@ -91,6 +100,7 @@ class StoredEvent:
             "source_ip": self.source_ip,
             "provider": self.provider,
             "verified": self.verified,
+            "verify_reason": self.verify_reason,
             "content_type": self.content_type,
             "size": len(self.body),
             "is_json": is_json,
@@ -108,6 +118,7 @@ class StoredEvent:
             "source_ip": self.source_ip,
             "provider": self.provider,
             "verified": self.verified,
+            "verify_reason": self.verify_reason,
             "body_base64": base64.b64encode(self.body).decode("ascii"),
         }
 
@@ -123,6 +134,7 @@ class StoredEvent:
             source_ip=data.get("source_ip"),
             provider=data.get("provider"),
             verified=data.get("verified"),
+            verify_reason=data.get("verify_reason"),
         )
 
 
@@ -151,6 +163,10 @@ class Storage:
     def _init_schema(self) -> None:
         with self._session() as conn:
             conn.executescript(SCHEMA)
+            existing = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
+            for column, sql_type in MIGRATIONS:
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE events ADD COLUMN {column} {sql_type}")
 
     # -- writes ------------------------------------------------------------
     def insert(self, event: StoredEvent) -> int:
@@ -159,8 +175,8 @@ class Storage:
                 """
                 INSERT INTO events
                     (received_at, method, path, query, headers, body,
-                     source_ip, provider, verified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source_ip, provider, verified, verify_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.received_at,
@@ -172,6 +188,7 @@ class Storage:
                     event.source_ip,
                     event.provider,
                     event.verified,
+                    event.verify_reason,
                 ),
             )
             event.id = int(cursor.lastrowid)
@@ -201,6 +218,7 @@ class Storage:
             source_ip=row["source_ip"],
             provider=row["provider"],
             verified=row["verified"],
+            verify_reason=row["verify_reason"],
         )
 
     def get(self, event_id: int) -> StoredEvent | None:

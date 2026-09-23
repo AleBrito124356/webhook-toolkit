@@ -106,3 +106,51 @@ def test_capture_preserves_raw_body_bytes(client, db_path):
     raw = b"\x00\xffnot-utf8\r\n"
     client.post("/bin", content=raw, headers={"Content-Type": "application/octet-stream"})
     assert Storage(db_path).get(1).body == raw
+
+
+# --- reasons ------------------------------------------------------------------------
+def test_unsigned_request_is_labelled_unsigned(client, db_path):
+    data = client.post("/anything", content=b"{}").json()
+    assert data["verified"] is None
+    assert data["reason"] == "unsigned: no known signature header"
+    assert Storage(db_path).get(1).verify_reason == "unsigned: no known signature header"
+
+
+def test_invalid_capture_stores_the_diagnosis(client, db_path):
+    os.environ["GITHUB_WEBHOOK_SECRET"] = DEMO_SECRET
+    headers = _github_headers()
+    client.post("/webhooks/github", content=BODY + b"\n", headers=headers)
+    stored = Storage(db_path).get(1)
+    assert stored.verified == 0
+    assert stored.verify_reason == "signature matches the payload with the trailing newline removed"
+
+
+def test_missing_secret_reason_names_the_variable(client):
+    data = client.post("/webhooks/github", content=BODY, headers=_github_headers()).json()
+    assert data["reason"] == "not checked: GITHUB_WEBHOOK_SECRET is not set"
+
+
+def test_placeholder_reason(client):
+    os.environ["GITHUB_WEBHOOK_SECRET"] = "use-a-long-random-string-here"
+    data = client.post("/webhooks/github", content=BODY, headers=_github_headers()).json()
+    assert data["reason"] == "not checked: GITHUB_WEBHOOK_SECRET is still a placeholder value"
+
+
+def test_generic_provider_detected_and_verified(db_path):
+    os.environ["GENERIC_WEBHOOK_HEADER"] = "X-Acme-Signature"
+    os.environ["GENERIC_WEBHOOK_ENCODING"] = "base64"
+    os.environ["GENERIC_WEBHOOK_PREFIX"] = "sha256="
+    os.environ["GENERIC_WEBHOOK_SECRET"] = DEMO_SECRET
+    scheme = verify.GenericScheme("X-Acme-Signature", "sha256", "base64", "sha256=")
+    with TestClient(create_app(db_path)) as client:
+        ok = client.post("/acme", content=BODY, headers={"X-Acme-Signature": verify.sign_generic(DEMO_SECRET, BODY, scheme)}).json()
+        bad = client.post("/acme", content=BODY, headers={"X-Acme-Signature": "sha256=AAAA"}).json()
+    assert ok["provider"] == "generic" and ok["verified"] == 1
+    assert bad["verified"] == 0
+
+
+def test_invalid_generic_configuration_fails_at_startup(db_path):
+    os.environ["GENERIC_WEBHOOK_HEADER"] = "X-Acme-Signature"
+    os.environ["GENERIC_WEBHOOK_ALGORITHM"] = "crc32"
+    with pytest.raises(ValueError, match="GENERIC_WEBHOOK"):
+        create_app(db_path)

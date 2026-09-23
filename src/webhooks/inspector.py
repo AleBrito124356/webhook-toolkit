@@ -63,6 +63,7 @@ INSPECTOR_HTML = """<!doctype html>
   table.headers td.k { color: var(--muted); white-space: nowrap; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   table.headers td.v { word-break: break-all; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   .id { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .reason { margin: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -87,10 +88,12 @@ INSPECTOR_HTML = """<!doctype html>
     });
   }
 
-  function verifiedChip(v) {
-    if (v === 1) return '<span class="chip ok">verified</span>';
-    if (v === 0) return '<span class="chip fail">invalid</span>';
-    return '<span class="chip unknown">no secret</span>';
+  function verifiedChip(ev) {
+    var title = ev.verify_reason ? ' title="' + esc(ev.verify_reason) + '"' : "";
+    if (ev.verified === 1) return '<span class="chip ok"' + title + '>verified</span>';
+    if (ev.verified === 0) return '<span class="chip fail"' + title + '>invalid</span>';
+    if (!ev.provider) return '<span class="chip unknown"' + title + '>unsigned</span>';
+    return '<span class="chip unknown"' + title + '>not checked</span>';
   }
 
   function prettyBody(ev) {
@@ -125,11 +128,12 @@ INSPECTOR_HTML = """<!doctype html>
           "<summary>" +
             '<span class="method ' + esc(ev.method) + '">' + esc(ev.method) + "</span>" +
             '<span class="path">' + esc(ev.path) + "</span>" +
-            provider + verifiedChip(ev.verified) +
+            provider + verifiedChip(ev) +
             '<span class="id">#' + ev.id + " &middot; " + ev.size + " B</span>" +
             '<span class="when">' + esc(ev.received_at) + "</span>" +
           "</summary>" +
           '<div class="body">' +
+            (ev.verify_reason && ev.verified !== 1 ? "<h4>Signature</h4><p class='reason'>" + esc(ev.verify_reason) + "</p>" : "") +
             "<h4>Body</h4><pre>" + esc(prettyBody(ev)) + "</pre>" +
             "<h4>Headers</h4><table class='headers'>" + headerRows(ev.headers) + "</table>" +
           "</div>" +

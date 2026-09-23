@@ -107,3 +107,59 @@ def test_fixture_rejects_unknown_version(tmp_path):
     path.write_text(json.dumps({"version": 999, "events": []}), encoding="utf-8")
     with pytest.raises(ValueError):
         fixtures.import_from_file(Storage(str(tmp_path / "x.db")), path)
+
+
+# --- schema migration --------------------------------------------------------------
+OLD_SCHEMA = """
+CREATE TABLE events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    received_at TEXT    NOT NULL,
+    method      TEXT    NOT NULL,
+    path        TEXT    NOT NULL,
+    query       TEXT    NOT NULL,
+    headers     TEXT    NOT NULL,
+    body        BLOB    NOT NULL,
+    source_ip   TEXT,
+    provider    TEXT,
+    verified    INTEGER
+);
+INSERT INTO events (received_at, method, path, query, headers, body, provider, verified)
+VALUES ('2026-01-01T00:00:00Z', 'POST', '/old', '{}', '{}', X'7B7D', 'github', 1);
+"""
+
+
+def test_database_from_the_first_release_is_migrated_in_place(tmp_path):
+    import sqlite3
+    from contextlib import closing
+
+    path = str(tmp_path / "old.db")
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(OLD_SCHEMA)
+
+    storage = Storage(path)  # runs the migration
+    old = storage.get(1)
+    assert old.path == "/old" and old.verify_reason is None and old.body == b"{}"
+
+    new_id = storage.insert(_sample())
+    storage.get(new_id)
+    event = _sample()
+    event.verify_reason = "signature valid"
+    storage.insert(event)
+    assert storage.list()[0].verify_reason == "signature valid"
+
+    Storage(path)  # idempotent: a second open must not try to add the column again
+    with closing(sqlite3.connect(path)) as conn:
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(events)")]
+    assert columns.count("verify_reason") == 1
+
+
+def test_verify_reason_survives_fixture_roundtrip(tmp_path):
+    src = Storage(str(tmp_path / "a.db"))
+    event = _sample(verified=0)
+    event.verify_reason = "timestamp is 3600 s old, tolerance 300 s"
+    src.insert(event)
+    path = tmp_path / "f.json"
+    fixtures.export_to_file(src, path)
+    dst = Storage(str(tmp_path / "b.db"))
+    fixtures.import_from_file(dst, path)
+    assert dst.get(1).verify_reason == "timestamp is 3600 s old, tolerance 300 s"

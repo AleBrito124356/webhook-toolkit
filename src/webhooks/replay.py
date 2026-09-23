@@ -19,7 +19,15 @@ from dataclasses import dataclass
 import httpx
 
 from .storage import StoredEvent
-from .verify import PROVIDERS, SIGNERS, SLACK_TIMESTAMP_HEADER
+from .verify import (
+    GITHUB_LEGACY_HEADER,
+    PROVIDERS,
+    SIGNERS,
+    SLACK_TIMESTAMP_HEADER,
+    GenericScheme,
+    sign_generic,
+    sign_github_legacy,
+)
 
 # Headers that describe the *original* connection or message framing, never the
 # payload. Copying them onto a new request produces invalid HTTP: a captured
@@ -55,6 +63,7 @@ class ReplayRequest:
     url: str
     headers: dict[str, str]
     body: bytes
+    resigned: bool = False
 
     def header(self, name: str) -> str | None:
         target = name.lower()
@@ -100,6 +109,10 @@ def _clean_headers(headers: dict[str, str], overrides: dict[str, str] | None) ->
     return cleaned
 
 
+def _has_header(headers: dict[str, str], name: str) -> bool:
+    return any(existing.lower() == name.lower() for existing in headers)
+
+
 def _set_header(headers: dict[str, str], name: str, value: str) -> None:
     for existing in list(headers):
         if existing.lower() == name.lower():
@@ -116,19 +129,25 @@ def build_replay_request(
     override_body: bytes | None = None,
     extra_headers: dict[str, str] | None = None,
     now: int | None = None,
+    scheme: GenericScheme | None = None,
 ) -> ReplayRequest:
     """Return the request to send when replaying ``event`` to ``target_url``.
 
     When both ``provider`` and ``secret`` are given, the provider's signature
     header (and Slack's timestamp header) are recomputed over the outgoing body
-    so the receiving handler accepts the replay.
+    so the receiving handler accepts the replay. ``scheme`` describes the
+    ``generic`` provider's header, digest and encoding.
     """
     body = event.body if override_body is None else override_body
     headers = _clean_headers(event.headers, extra_headers)
 
     resolved_provider = provider or event.provider
     resigned = False
-    if secret is not None and resolved_provider in SIGNERS:
+    if secret is not None and resolved_provider == "generic":
+        scheme = scheme or GenericScheme()
+        _set_header(headers, scheme.signature_header, sign_generic(secret, body, scheme))
+        resigned = True
+    elif secret is not None and resolved_provider in SIGNERS:
         spec = PROVIDERS[resolved_provider]
         signer = SIGNERS[resolved_provider]
         if spec.needs_timestamp:
@@ -139,9 +158,14 @@ def build_replay_request(
         else:
             signature = signer(secret, body)
         _set_header(headers, spec.signature_header, signature)
+        if resolved_provider == "github" and _has_header(headers, GITHUB_LEGACY_HEADER):
+            # Keep GitHub's legacy SHA-1 header consistent with the new body.
+            _set_header(headers, GITHUB_LEGACY_HEADER, sign_github_legacy(secret, body))
         resigned = True
 
-    return ReplayRequest(method=event.method, url=target_url, headers=headers, body=body)
+    return ReplayRequest(
+        method=event.method, url=target_url, headers=headers, body=body, resigned=resigned
+    )
 
 
 def send_replay(request: ReplayRequest, *, timeout: float = 10.0) -> ReplayResult:
@@ -179,6 +203,7 @@ def replay_event(
     extra_headers: dict[str, str] | None = None,
     timeout: float = 10.0,
     now: int | None = None,
+    scheme: GenericScheme | None = None,
 ) -> ReplayResult:
     """Build and send a replay in one call, returning the result."""
     request = build_replay_request(
@@ -189,7 +214,8 @@ def replay_event(
         override_body=override_body,
         extra_headers=extra_headers,
         now=now,
+        scheme=scheme,
     )
     result = send_replay(request, timeout=timeout)
-    result.resigned = secret is not None and (provider or event.provider) in SIGNERS
+    result.resigned = request.resigned
     return result

@@ -21,13 +21,15 @@ from dataclasses import dataclass, field
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from . import __version__, config
 from .forward import TargetStats, forward_event
 from .inspector import INSPECTOR_HTML
+from .inbound import assess
 from .storage import Storage, StoredEvent
-from .verify import detect_provider, verify_request
+from .verify import GenericScheme, detect_provider
 
 console = Console()
 
@@ -50,48 +52,34 @@ class ServerState:
     forward_targets: list[str] = field(default_factory=list)
     verify_inbound: bool = True
     stats: dict[str, TargetStats] = field(default_factory=dict)
+    generic: GenericScheme | None = None
 
     def __post_init__(self) -> None:
         for target in self.forward_targets:
             self.stats.setdefault(target, TargetStats(target))
 
 
-def _verify_inbound(event: StoredEvent) -> int | None:
-    """Return 1/0/None for a captured event using any configured secret.
-
-    * no provider detected, or no secret configured -> ``None``
-    * a real secret -> ``1`` / ``0``
-    * a placeholder secret -> ``1`` when the capture was signed with that very
-      placeholder (a local demo or the bundled fixture), otherwise ``None``: a
-      real provider never signs with a placeholder, so "invalid" would mislead.
-    """
+def _verify_label(event: StoredEvent) -> str:
+    """Console label for a capture's verification state."""
+    if event.verified == 1:
+        return "[green]verified[/]"
+    if event.verified == 0:
+        return "[red]invalid[/]"
     if not event.provider:
-        return None
-    status = config.secret_status(event.provider)
-    if not status.usable:
-        return None
-    result = verify_request(
-        event.provider,
-        status.value.encode("utf-8"),
-        event.body,
-        event.headers,
-        tolerance=config.DEFAULT_TOLERANCE,
-    )
-    if result.ok:
-        return 1
-    return 0 if status.state == "set" else None
+        return "[dim]unsigned[/]"
+    return "[yellow]not checked[/]"
 
 
 def _log_event(event: StoredEvent) -> None:
-    verdict = {1: "[green]verified[/]", 0: "[red]invalid[/]", None: "[yellow]no secret[/]"}[
-        event.verified
-    ]
     provider = event.provider or "unknown"
-    console.print(
-        f"[bold cyan]#{event.id}[/] [bold]{event.method}[/] {event.path} "
-        f"[dim]| {provider} |[/] {verdict} "
+    line = (
+        f"[bold cyan]#{event.id}[/] [bold]{event.method}[/] {escape(event.path)} "
+        f"[dim]| {provider} |[/] {_verify_label(event)} "
         f"[dim]| {len(event.body)} B | {event.received_at}[/]"
     )
+    console.print(line)
+    if event.verified != 1 and event.provider and event.verify_reason:
+        console.print(f"   [dim]{escape(event.verify_reason)}[/]")
 
 
 def _log_forward(event_id: int, results, stats: dict[str, TargetStats]) -> None:
@@ -131,6 +119,9 @@ def create_app(
         storage=Storage(db_path),
         forward_targets=list(forward_targets or []),
         verify_inbound=verify_inbound,
+        # Read once: an invalid GENERIC_WEBHOOK_* setting fails at startup,
+        # not on the first request.
+        generic=config.generic_scheme(),
     )
     app.state.wt = state
 
@@ -162,7 +153,7 @@ def create_app(
         body = await request.body()
         headers = dict(request.headers)
         query = dict(request.query_params)
-        provider = detect_provider(headers)
+        provider = detect_provider(headers, generic=state.generic)
 
         event = StoredEvent(
             method=request.method,
@@ -174,7 +165,9 @@ def create_app(
             provider=provider,
         )
         if state.verify_inbound:
-            event.verified = _verify_inbound(event)
+            assessment = assess(event, generic=state.generic)
+            event.verified = assessment.verified
+            event.verify_reason = assessment.reason
 
         state.storage.insert(event)
         _log_event(event)
@@ -188,6 +181,7 @@ def create_app(
                 "id": event.id,
                 "provider": provider,
                 "verified": event.verified,
+                "reason": event.verify_reason,
             }
         )
 

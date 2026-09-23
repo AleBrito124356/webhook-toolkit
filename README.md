@@ -64,7 +64,14 @@ for the common ones, plus a generic HMAC helper for everything else.
 | **Stripe** | `Stripe-Signature` | `t=<ts>,v1=<hex>` HMAC-SHA256 over `<ts>.<body>`, timestamp tolerance |
 | **Slack** | `X-Slack-Signature` | `v0=` + hex HMAC-SHA256 over `v0:<ts>:<body>`, timestamp in `X-Slack-Request-Timestamp` |
 | **Shopify** | `X-Shopify-Hmac-Sha256` | base64 HMAC-SHA256 of the raw body |
-| **Generic** | *(you choose)* | HMAC with configurable digest, hex or base64 encoding, optional prefix |
+| **Generic** | *(you choose)* | HMAC of the raw body with configurable header, digest, hex or base64 encoding and prefix |
+
+The generic provider is configured with `GENERIC_WEBHOOK_HEADER`,
+`GENERIC_WEBHOOK_ALGORITHM` (`sha256` default, also `sha1`, `sha512`, ...),
+`GENERIC_WEBHOOK_ENCODING` (`hex`/`base64`), `GENERIC_WEBHOOK_PREFIX` and
+`GENERIC_WEBHOOK_SECRET`. Once the header is set, the receiver detects and
+verifies it like the built-in providers, `replay --sign` re-signs it, and
+`verify --provider generic` accepts the same settings as options.
 
 > ### Always verify signatures
 > An unverified webhook endpoint is an **unauthenticated POST from the internet**.
@@ -175,19 +182,46 @@ python cli.py replay 2 --to http://127.0.0.1:3002/webhooks/stripe \
     --sign --body edited_payload.json --header "X-Debug: 1"
 ```
 
-### Verify a payload + signature pair
+### Verify a payload + signature pair — and find out *why* it fails
 
 ```bash
 python cli.py verify --provider github \
     --payload payload.json \
-    --signature "sha256=..." \
-    --secret "use-a-long-random-string-here"
-# -> VALID GitHub signature (signature valid)      (exit 0)
-# -> INVALID GitHub signature (...)                (exit 1)
+    --signature "sha256=3e5403108ea4212413f575f986530161303770c55684656aeb4c4f1a8cef8a9c" \
+    --secret my-dev-secret
 ```
 
-`--tolerance 0` disables the Stripe/Slack timestamp check when you deliberately
-verify an old capture; `--now <epoch>` pins the clock for deterministic checks.
+```
+INVALID GitHub signature (signature matches the payload with the trailing newline removed)
+  code: mismatch
+  hint: Something changed the bytes after they were signed (an editor saving the file, `echo`, a shell heredoc). Verify the exact bytes that were received.
+```
+
+A failure is never just "invalid". The diagnosis engine (`verify.diagnose`)
+classifies it as `missing_signature_header`, `malformed_header`,
+`missing_timestamp`, `timestamp_out_of_tolerance` (with the skew in seconds and
+its direction) or `mismatch`, and for mismatches it re-computes the HMAC under
+the mistakes people actually make until one explains the failure:
+
+| Mistake it recognises | Example explanation |
+|---|---|
+| Trailing newline / CRLF added or removed, LF↔CRLF conversion (git `autocrlf`) | `signature matches the payload with CRLF line endings converted to LF` |
+| JSON parsed and re-serialized (compact, `json.dumps` defaults, pretty, sorted keys, escaped non-ASCII) | `signature matches the payload re-serialized as compact JSON (no spaces)` |
+| Whitespace or a newline around the secret | `signature matches the secret with surrounding whitespace removed` |
+| Stripe `whsec_` prefix missing, dropped by the sender, or duplicated | `signature matches the secret with a 'whsec_' prefix added` |
+| Svix / Standard Webhooks secrets (base64 after `whsec_`), hex-decoded secrets | `signature matches the base64-decoded secret (Svix / Standard Webhooks scheme)` |
+| Secrets swapped between configured providers | `signature matches the secret configured for Shopify (SHOPIFY_WEBHOOK_SECRET)` |
+| Hex vs base64, missing `sha256=` / `v0=` prefix, SHA-1 instead of SHA-256, uppercase hex | `the digest is hex-encoded but Shopify sends base64` + "the digest itself is correct" |
+| Only GitHub's legacy `X-Hub-Signature` (SHA-1) present | "it matches your secret … whatever delivered this dropped X-Hub-Signature-256" |
+| Stripe/Slack signature computed without the timestamp | `signature is an HMAC of the body alone, without the timestamp` |
+| Stale or future timestamps, millisecond timestamps | `timestamp is 3601 s old, tolerance 300 s` + "the signature itself is valid … replay it with --sign" |
+
+Exit codes: `0` valid, `1` invalid, `2` usage error (missing secret, bad
+options). `--json` prints the diagnosis as JSON, `--header 'Name: value'` adds
+extra request headers (e.g. the legacy `X-Hub-Signature`), `--tolerance 0`
+disables the Stripe/Slack timestamp check and `--now <epoch>` pins the clock.
+`python cli.py show <id>` prints a stored capture with the same diagnosis; the
+receiver stores the one-line reason with every capture and `list` shows it.
 
 ### Inspect, export, import
 

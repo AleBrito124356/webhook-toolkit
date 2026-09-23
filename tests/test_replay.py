@@ -173,3 +173,30 @@ def test_chunked_capture_replays_as_valid_http_on_the_wire():
     assert not any(line.startswith("transfer-encoding") for line in header_lines)
     assert f"content-length: {len(BODY)}" in header_lines
     assert captured["body"] == BODY
+
+
+# --- generic provider and GitHub's legacy header ------------------------------------
+def test_replay_resigns_generic_provider_with_its_scheme():
+    scheme = verify.GenericScheme("X-Acme-Signature", "sha512", "base64", "v1=")
+    event = _event("generic", {"X-Acme-Signature": "v1=stale"})
+    request = build_replay_request(event, "http://localhost:9/hook", secret=FAKE_SECRET, scheme=scheme)
+    assert request.resigned
+    assert verify.verify_generic(FAKE_SECRET, BODY, request.header("X-Acme-Signature"), scheme)
+
+
+def test_replay_updates_legacy_github_header_when_present():
+    event = _event("github", {verify.GITHUB_HEADER: "sha256=stale", verify.GITHUB_LEGACY_HEADER: "sha1=stale"})
+    new_body = b'{"edited": true}'
+    request = build_replay_request(event, "http://localhost:9/hook", secret=FAKE_SECRET, override_body=new_body)
+    assert request.header(verify.GITHUB_LEGACY_HEADER) == verify.sign_github_legacy(FAKE_SECRET, new_body)
+
+
+def test_replay_without_legacy_header_does_not_add_one():
+    event = _event("github", {verify.GITHUB_HEADER: "sha256=stale"})
+    request = build_replay_request(event, "http://localhost:9/hook", secret=FAKE_SECRET)
+    assert request.header(verify.GITHUB_LEGACY_HEADER) is None
+
+
+def test_replay_of_unsigned_event_is_not_marked_resigned():
+    event = _event(None, {})
+    assert build_replay_request(event, "http://localhost:9/hook", secret=FAKE_SECRET).resigned is False
